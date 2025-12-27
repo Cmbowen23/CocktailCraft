@@ -33,6 +33,7 @@ import SubRecipeDetail from './SubRecipeDetail.jsx';
 import TestDistributorUpload from './TestDistributorUpload.jsx';
 import UserProfile from './UserProfile.jsx';
 import AuthRedirect from './AuthRedirect.jsx';
+import AuthCallback from './AuthCallback.jsx';
 
 const PAGES = {
   AcceptInvitation,
@@ -100,6 +101,7 @@ function PagesContent() {
         <Route path="/accounts" element={<Accounts />} />
         <Route path="/adminusers" element={<AdminUsers />} />
         <Route path="/authentication" element={<Authentication />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/login" element={<AuthRedirect />} />
         <Route path="/signin" element={<AuthRedirect />} />
         <Route path="/buyerspecs" element={<BuyerSpecs />} />
