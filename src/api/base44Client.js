@@ -44,5 +44,15 @@ export const base44 = {
     }
   ),
 
-  integrations: {},
+    integrations: {
+    // Some parts of the app expect Base44 "LLM" integration helpers.
+    // For now, return a safe stub so the UI can boot.
+    InvokeLLM: async () => {
+      throw new Error("Base44 shim not implemented: integrations.InvokeLLM");
+    },
+
+    // If the code calls other integration names, they’ll still fail clearly
+    // but won’t crash on property access.
+  },
+
 };
