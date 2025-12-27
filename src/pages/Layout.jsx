@@ -1,6 +1,6 @@
 
 import React from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
@@ -79,6 +79,7 @@ const fetchUserWithRetry = async (maxAttempts = 3) => {
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isProcessingTokens, setIsProcessingTokens] = React.useState(false);
@@ -109,12 +110,12 @@ export default function Layout({ children, currentPageName }) {
               localStorage.removeItem('cc_invite_token');
 
               if (buyerResult && buyerResult.success) {
-                 window.location.href = createPageUrl(`MenuDetails?id=${buyerResult.menu_id}`);
+                 navigate(`/menudetails?id=${buyerResult.menu_id}`);
                  return;
               }
 
               if (repResult && repResult.success) {
-                window.location.href = createPageUrl("Dashboard");
+                navigate('/dashboard');
                 return;
               }
 
@@ -143,17 +144,16 @@ export default function Layout({ children, currentPageName }) {
   React.useEffect(() => {
     // Redirect unauthenticated users to Authentication page
     if (!isLoading && !currentUser) {
-      const isPublicPage = location.pathname.includes('AcceptInvitation') || location.pathname.includes('PublicLink') || location.pathname.includes('CustomerMenuPreview') || location.pathname.includes('Authentication') || location.pathname.includes('InviteWelcome') || location.pathname.toLowerCase().includes('/signin') || location.pathname.toLowerCase().includes('/login');
+      const isPublicPage = location.pathname === '/' || location.pathname.includes('AcceptInvitation') || location.pathname.includes('PublicLink') || location.pathname.includes('CustomerMenuPreview') || location.pathname.includes('Authentication') || location.pathname.includes('InviteWelcome') || location.pathname.toLowerCase().includes('/signin') || location.pathname.toLowerCase().includes('/login');
 
       if (!isPublicPage) {
-          // Instead of auto-redirecting to potentially broken login, send to Authentication landing
-          window.location.href = createPageUrl('Authentication');
+          navigate('/authentication');
       }
     } else if (currentUser && !isLoading) {
         // Prevent authenticated users from staying on Authentication page
-        const isAuthPage = location.pathname.includes('Authentication');
+        const isAuthPage = location.pathname === '/' || location.pathname.includes('Authentication');
         if (isAuthPage) {
-            window.location.href = createPageUrl('Dashboard');
+            navigate('/dashboard');
             return;
         }
 
@@ -162,10 +162,10 @@ export default function Layout({ children, currentPageName }) {
         const isBuyerAdmin = currentUser.user_type === 'buyer_admin';
 
         if (!currentUser.onboarding_complete && !isBuyerAdmin && !isOnboardingPage) {
-             window.location.href = createPageUrl("AccessCodeOnboarding");
+             navigate('/accesscodeonboarding');
         }
     }
-  }, [isLoading, currentUser, location.pathname]);
+  }, [isLoading, currentUser, location.pathname, navigate]);
 
   const handleLogout = async () => {
     try {
@@ -182,10 +182,10 @@ export default function Layout({ children, currentPageName }) {
 
       // Log out of Base44 and redirect to Authentication page
       await base44.auth.signOut();
-      window.location.href = createPageUrl('Authentication');
+      navigate('/authentication');
     } catch (error) {
       console.error('Error logging out:', error);
-      window.location.href = createPageUrl('Authentication');
+      navigate('/authentication');
     }
   };
 
@@ -245,16 +245,15 @@ export default function Layout({ children, currentPageName }) {
   settingsNavigation.push({ title: "App Settings", url: createPageUrl("Settings"), icon: Settings });
   
   // Determine Layout Mode
-  const isAuthPage = location.pathname.includes('Authentication') || location.pathname.toLowerCase().includes('/signin') || location.pathname.toLowerCase().includes('/login');
+  const isAuthPage = location.pathname === '/' || location.pathname.includes('Authentication') || location.pathname.toLowerCase().includes('/signin') || location.pathname.toLowerCase().includes('/login');
   const isPublicSharePage = location.pathname.includes('AcceptInvitation') || location.pathname.includes('PublicLink') || location.pathname.includes('CustomerMenuPreview');
   const isOnboarding = location.pathname.includes('AccessCodeOnboarding');
-  
+
   // We hide the sidebar if:
   // 1. User is not logged in
   // 2. It's an authentication page
   // 3. It's a public share page (like a menu preview)
   // 4. It's the onboarding page
-  // Note: We show sidebar on Home (/) if user IS logged in
   const shouldHideSidebar = !currentUser || isAuthPage || isPublicSharePage || isOnboarding;
 
   return (
