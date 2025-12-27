@@ -1,23 +1,23 @@
 import { base44 } from './base44Client';
 
+export const InvokeLLM = base44.integrations.InvokeLLM;
 
+export const Core = {
+  InvokeLLM: base44.integrations.InvokeLLM,
+  SendEmail: async () => { throw new Error('SendEmail not implemented') },
+  UploadFile: async () => { throw new Error('UploadFile not implemented') },
+  GenerateImage: async () => { throw new Error('GenerateImage not implemented') },
+  ExtractDataFromUploadedFile: async () => { throw new Error('ExtractDataFromUploadedFile not implemented') },
+  CreateFileSignedUrl: async () => { throw new Error('CreateFileSignedUrl not implemented') },
+  UploadPrivateFile: async () => { throw new Error('UploadPrivateFile not implemented') },
+};
 
-
-export const Core = base44.integrations.Core;
-
-export const InvokeLLM = base44.integrations.Core.InvokeLLM;
-
-export const SendEmail = base44.integrations.Core.SendEmail;
-
-export const UploadFile = base44.integrations.Core.UploadFile;
-
-export const GenerateImage = base44.integrations.Core.GenerateImage;
-
-export const ExtractDataFromUploadedFile = base44.integrations.Core.ExtractDataFromUploadedFile;
-
-export const CreateFileSignedUrl = base44.integrations.Core.CreateFileSignedUrl;
-
-export const UploadPrivateFile = base44.integrations.Core.UploadPrivateFile;
+export const SendEmail = Core.SendEmail;
+export const UploadFile = Core.UploadFile;
+export const GenerateImage = Core.GenerateImage;
+export const ExtractDataFromUploadedFile = Core.ExtractDataFromUploadedFile;
+export const CreateFileSignedUrl = Core.CreateFileSignedUrl;
+export const UploadPrivateFile = Core.UploadPrivateFile;
 
 
 
