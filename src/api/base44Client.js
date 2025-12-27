@@ -1,8 +1,48 @@
-import { createClient } from '@base44/sdk';
-// import { getAccessToken } from '@base44/sdk/utils/auth-utils';
+// src/api/base44Client.js
+// Base44 SHIM for migration (StackBlitz/Bolt).
+// Purpose: stop redirects to base44.app and allow the UI to boot.
+// Next steps will wire entities/functions/auth to Supabase.
 
-// Create a client with authentication required
-export const base44 = createClient({
-  appId: "68648b7f4ac37377589a671c", 
-  requiresAuth: true // Ensure authentication is required for all operations
-});
+function notImplemented(path) {
+  const err = new Error(`Base44 shim not implemented: ${path}`);
+  err.code = "BASE44_SHIM_NOT_IMPLEMENTED";
+  throw err;
+}
+
+export const base44 = {
+  auth: {
+    // UI commonly calls these
+    me: async () => null,
+    signIn: async () => notImplemented("auth.signIn"),
+    signOut: async () => null,
+    getSession: async () => null,
+  },
+
+  // Entities will be swapped to Supabase next (Step 2)
+  entities: new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        return {
+          list: async () => notImplemented(`entities.${String(prop)}.list`),
+          get: async () => notImplemented(`entities.${String(prop)}.get`),
+          create: async () => notImplemented(`entities.${String(prop)}.create`),
+          update: async () => notImplemented(`entities.${String(prop)}.update`),
+          delete: async () => notImplemented(`entities.${String(prop)}.delete`),
+        };
+      },
+    }
+  ),
+
+  // Functions will be swapped to Supabase Edge Functions later
+  functions: new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        return async () => notImplemented(`functions.${String(prop)}`);
+      },
+    }
+  ),
+
+  integrations: {},
+};
