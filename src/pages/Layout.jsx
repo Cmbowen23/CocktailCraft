@@ -181,7 +181,8 @@ export default function Layout({ children, currentPageName }) {
       }
 
       // Log out of Base44 and redirect to Authentication page
-      await base44.auth.logout(createPageUrl('Authentication'));
+      await base44.auth.signOut();
+      window.location.href = createPageUrl('Authentication');
     } catch (error) {
       console.error('Error logging out:', error);
       window.location.href = createPageUrl('Authentication');
