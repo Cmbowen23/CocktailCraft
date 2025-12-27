@@ -20,9 +20,13 @@ export default function AuthenticationPage() {
 
     useEffect(() => {
         const checkSession = async () => {
-            const session = await base44.auth.getSession();
-            if (session) {
-                navigate("/dashboard");
+            try {
+                const user = await base44.auth.me();
+                if (user) {
+                    navigate("/dashboard");
+                }
+            } catch (error) {
+                console.error('Error checking session:', error);
             }
         };
         checkSession();
