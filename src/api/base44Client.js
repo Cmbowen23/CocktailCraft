@@ -31,6 +31,7 @@ const TABLE_NAME_MAP = {
   RecipeVersion: 'recipe_versions',
   Glassware: 'glassware',
   RecipeCategory: 'recipe_categories',
+  Profile: 'profiles',
 }
 
 function createEntityMethods(tableName) {
@@ -122,7 +123,42 @@ export const base44 = {
     async me() {
       const { data: { user }, error } = await supabase.auth.getUser()
       if (error) return null
-      return user
+      if (!user) return null
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (!profile) {
+        return {
+          ...user,
+          role: 'user',
+          user_type: 'internal',
+          onboarding_complete: false,
+        }
+      }
+
+      return {
+        ...user,
+        ...profile,
+      }
+    },
+
+    async updateMe(updates) {
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      if (authError || !user) throw new Error('Not authenticated')
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', user.id)
+        .select()
+        .single()
+
+      if (error) throw error
+      return data
     },
 
     async signIn(email, password) {

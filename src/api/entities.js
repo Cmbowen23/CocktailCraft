@@ -61,7 +61,23 @@ export const Glassware = base44.entities.Glassware;
 
 export const RecipeCategory = base44.entities.RecipeCategory;
 
+export const Profile = base44.entities.Profile;
 
-
-// auth sdk:
-export const User = base44.auth;
+export const User = {
+  ...base44.auth,
+  list: async () => {
+    return await base44.entities.Profile.list();
+  },
+  get: async (id) => {
+    return await base44.entities.Profile.get(id);
+  },
+  update: async (id, payload) => {
+    return await base44.entities.Profile.update(id, payload);
+  },
+  delete: async (id) => {
+    return await base44.entities.Profile.delete(id);
+  },
+  filter: async (filters, limit) => {
+    return await base44.entities.Profile.filter(filters, limit);
+  }
+};
