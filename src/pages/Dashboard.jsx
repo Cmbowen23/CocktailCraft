@@ -94,7 +94,7 @@ export default function DashboardPage() {
 
   const loadIngredients = async () => {
     try {
-      const ingredientsData = await Ingredient.list('-updated_date', 5000);
+      const ingredientsData = await Ingredient.list('-updated_at', 5000);
       setAllIngredients(ingredientsData || []);
     } catch (error) {
       console.error("Error loading ingredients:", error);
@@ -133,29 +133,29 @@ export default function DashboardPage() {
       }
 
       // Serialized requests with retry logic and delays to prevent rate limiting
-      
-      const accountsData = await retryWithBackoff(() => Account.filter({ created_by: user.email })).catch(err => {
+
+      const accountsData = await retryWithBackoff(() => Account.list()).catch(err => {
         console.error("Error loading accounts:", err);
         return [];
       });
       setAccounts(accountsData || []);
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const menusData = await retryWithBackoff(() => Menu.filter({ created_by: user.email })).catch(err => {
+      const menusData = await retryWithBackoff(() => Menu.list()).catch(err => {
         console.error("Error loading menus:", err);
         return [];
       });
       setMenus(menusData || []);
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const tastingsData = await retryWithBackoff(() => Tasting.filter({ created_by: user.email }, '-date')).catch(err => {
+      const tastingsData = await retryWithBackoff(() => Tasting.list('-date')).catch(err => {
         console.error("Error loading tastings:", err);
         return [];
       });
       setTastings(tastingsData || []);
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const tasksData = await retryWithBackoff(() => Task.filter({ created_by: user.email }, '-due_date')).catch(err => {
+      const tasksData = await retryWithBackoff(() => Task.list('-due_date')).catch(err => {
         console.error("Error loading tasks:", err);
         return [];
       });
