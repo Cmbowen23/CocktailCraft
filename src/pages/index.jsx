@@ -111,7 +111,7 @@ function PagesContent() {
         <Route path="/createsubrecipe" element={<CreateSubRecipe />} />
         <Route path="/customermenupreview" element={<CustomerMenuPreview />} />
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/duplicaterecipemanager" element={<DuplicateRecipeManager />} />
+        <Route path="/duplicate-recipe-manager" element={<DuplicateRecipeManager />} />
         <Route path="/editrecipe" element={<EditRecipe />} />
         <Route path="/imageuploadaudit" element={<ImageUploadAudit />} />
         <Route path="/ingredientsync" element={<IngredientSync />} />
