@@ -28,8 +28,7 @@ export default function AccessCodeOnboardingPage() {
         setError("");
 
         try {
-            const response = await base44.functions.invoke('applyAccessCode', { code: accessCode });
-            const result = response.data;
+            const result = await base44.functions.applyAccessCode({ code: accessCode });
 
             if (result.success) {
                 // Redirect to dashboard
@@ -48,10 +47,10 @@ export default function AccessCodeOnboardingPage() {
     const handleSkip = async () => {
         setIsLoading(true);
         setError("");
-        
+
         try {
-             const response = await base44.functions.invoke('applyAccessCode', { code: "" });
-             if (response.data.success) {
+             const result = await base44.functions.applyAccessCode({ code: "" });
+             if (result.success) {
                  window.location.href = createPageUrl("Dashboard");
              } else {
                  setError("Failed to skip. Please try again.");

@@ -227,7 +227,9 @@ export const base44 = {
     {
       get(_target, functionName) {
         return async (...args) => {
-          const { data, error } = await supabase.functions.invoke(functionName, {
+          // Convert camelCase to kebab-case for Supabase function slugs
+          const slug = functionName.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()
+          const { data, error } = await supabase.functions.invoke(slug, {
             body: args[0] || {},
           })
           if (error) throw error
