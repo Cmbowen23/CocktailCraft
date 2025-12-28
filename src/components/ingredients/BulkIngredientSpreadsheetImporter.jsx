@@ -163,11 +163,19 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
 
   const handleConfirmMappings = async () => {
     setIsProcessing(true);
+    setError('');
     setProgress('Loading existing product variants...');
-    
+
     try {
       // Fetch all existing product variants to match by SKU
-      const existingVariants = await base44.entities.ProductVariant.list("-created_at", 10000);
+      let existingVariants;
+      try {
+        existingVariants = await base44.entities.ProductVariant.list("-created_at", 10000);
+      } catch (variantError) {
+        console.warn('Failed to fetch variants with ordering, trying without ordering:', variantError);
+        // Fallback: try without ordering if the column name causes issues
+        existingVariants = await base44.entities.ProductVariant.list(null, 10000);
+      }
       setAllProductVariants(existingVariants || []);
       
       setProgress('Grouping ingredients by name...');
@@ -399,7 +407,18 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
       setStep('confirm');
     } catch (error) {
       console.error("Error processing ingredients:", error);
-      setError(`Failed to process ingredients: ${error.message}`);
+
+      let errorMessage = 'Failed to process ingredients. ';
+
+      if (error.message && error.message.includes('product_variants')) {
+        errorMessage += 'There was an issue accessing the product variants database. Please ensure the database is set up correctly.';
+      } else if (error.message) {
+        errorMessage += error.message;
+      } else {
+        errorMessage += 'An unexpected error occurred. Please try again.';
+      }
+
+      setError(errorMessage);
     } finally {
       setIsProcessing(false);
       setProgress('');
@@ -817,6 +836,20 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
+            {error && (
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-red-500" />
+                <span className="text-red-700">{error}</span>
+              </div>
+            )}
+
+            {progress && (
+              <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                <span className="text-blue-700">{progress}</span>
+              </div>
+            )}
+
             <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
               <h4 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
                 <AlertCircle className="w-5 h-5" />
