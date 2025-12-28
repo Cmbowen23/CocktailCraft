@@ -41,20 +41,52 @@ Deno.serve(async (req: Request) => {
 
     // If no code provided (skip option), just mark onboarding complete
     if (!code || code.trim() === "") {
-      const { error: updateError } = await supabaseClient
+      // First check if profile exists
+      const { data: existingProfile } = await supabaseClient
         .from("profiles")
-        .update({ onboarding_complete: true })
-        .eq("id", user.id);
+        .select("id")
+        .eq("id", user.id)
+        .maybeSingle();
 
-      if (updateError) {
-        console.error("Error updating profile:", updateError);
-        return new Response(
-          JSON.stringify({ success: false, message: "Failed to update profile" }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
+      if (!existingProfile) {
+        // Create profile if it doesn't exist
+        const { error: insertError } = await supabaseClient
+          .from("profiles")
+          .insert({
+            id: user.id,
+            email: user.email,
+            role: "user",
+            user_type: "internal",
+            onboarding_complete: true,
+          });
+
+        if (insertError) {
+          console.error("Error creating profile:", insertError);
+          return new Response(
+            JSON.stringify({ success: false, message: "Failed to create profile", error: insertError.message }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+      } else {
+        // Update existing profile
+        const { error: updateError } = await supabaseClient
+          .from("profiles")
+          .update({ onboarding_complete: true })
+          .eq("id", user.id);
+
+        if (updateError) {
+          console.error("Error updating profile:", updateError);
+          return new Response(
+            JSON.stringify({ success: false, message: "Failed to update profile", error: updateError.message }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
       }
 
       return new Response(
@@ -119,6 +151,8 @@ Deno.serve(async (req: Request) => {
 
     // Update user profile with access code details
     const profileUpdate: any = {
+      id: user.id,
+      email: user.email,
       role: accessCode.role,
       user_type: accessCode.user_type,
       onboarding_complete: true,
@@ -132,15 +166,15 @@ Deno.serve(async (req: Request) => {
       profileUpdate.assigned_account_ids = accessCode.assigned_account_ids;
     }
 
-    const { error: updateError } = await supabaseClient
+    // Use upsert to handle both insert and update cases
+    const { error: upsertError } = await supabaseClient
       .from("profiles")
-      .update(profileUpdate)
-      .eq("id", user.id);
+      .upsert(profileUpdate, { onConflict: "id" });
 
-    if (updateError) {
-      console.error("Error updating profile:", updateError);
+    if (upsertError) {
+      console.error("Error upserting profile:", upsertError);
       return new Response(
-        JSON.stringify({ success: false, message: "Failed to update profile" }),
+        JSON.stringify({ success: false, message: "Failed to update profile", error: upsertError.message }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },

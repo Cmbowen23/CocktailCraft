@@ -38,7 +38,7 @@ export default function AccessCodeOnboardingPage() {
             }
         } catch (err) {
             console.error("Error applying code:", err);
-            setError("An unexpected error occurred. Please try again.");
+            setError(err.message || "An unexpected error occurred. Please try again.");
         } finally {
             setIsLoading(false);
         }
@@ -53,11 +53,11 @@ export default function AccessCodeOnboardingPage() {
              if (result.success) {
                  window.location.href = createPageUrl("Dashboard");
              } else {
-                 setError("Failed to skip. Please try again.");
+                 setError(result.message || "Failed to skip. Please try again.");
              }
         } catch (err) {
              console.error("Error skipping:", err);
-             setError("An unexpected error occurred.");
+             setError(err.message || "An unexpected error occurred. Please try again.");
         } finally {
             setIsLoading(false);
         }

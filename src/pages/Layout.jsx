@@ -160,8 +160,9 @@ export default function Layout({ children, currentPageName }) {
         // Access Code Onboarding Check
         const isOnboardingPage = location.pathname.includes('AccessCodeOnboarding');
         const isBuyerAdmin = currentUser.user_type === 'buyer_admin';
+        const isAdminUser = currentUser.role === 'admin';
 
-        if (!currentUser.onboarding_complete && !isBuyerAdmin && !isOnboardingPage) {
+        if (!currentUser.onboarding_complete && !isBuyerAdmin && !isAdminUser && !isOnboardingPage) {
              navigate('/accesscodeonboarding');
         }
     }
