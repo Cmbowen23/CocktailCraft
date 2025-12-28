@@ -279,7 +279,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
 
       try {
         const { base44 } = await import("@/api/base44Client");
-        const allVariants = await base44.entities.ProductVariant.list("-created_date", 5000);
+        const allVariants = await base44.entities.ProductVariant.list("-created_at", 5000);
         
         const lookup = {};
         (allVariants || []).forEach(variant => {

@@ -26,7 +26,7 @@ export default function InventoryReportPage() {
     setLoading(true);
     try {
       const [reportsData, ingredientsData, variantsData] = await Promise.all([
-        base44.entities.InventoryReport.list("-created_date", 50),
+        base44.entities.InventoryReport.list("-created_at", 50),
         base44.entities.Ingredient.list(),
         base44.entities.ProductVariant.list()
       ]);

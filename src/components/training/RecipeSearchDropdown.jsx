@@ -27,7 +27,7 @@ export default function RecipeSearchDropdown({ onInsert }) {
             const [user, menus, allRecipes] = await Promise.all([
                 base44.auth.me(),
                 base44.entities.Menu.list(),
-                base44.entities.Recipe.list("-created_date")
+                base44.entities.Recipe.list("-created_at")
             ]);
 
             const userAccountMenuIds = new Set();

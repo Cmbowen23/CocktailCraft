@@ -25,7 +25,7 @@ export default function AISuggestionsModal({
     if (!open || variantsLoaded) return;
     const fetchVariants = async () => {
       try {
-        const allVariants = await base44.entities.ProductVariant.list("-created_date", 5000);
+        const allVariants = await base44.entities.ProductVariant.list("-created_at", 5000);
         const byIngredient = {};
         (allVariants || []).forEach((v) => {
           if (!v.ingredient_id) return;

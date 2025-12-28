@@ -86,11 +86,11 @@ export default function OpeningOrderTemplatesPage() {
       setCurrentUser(user);
 
       const [templatesData, ingredientsData, variantsData, accountsData, menusData] = await Promise.all([
-        base44.entities.OpeningOrderTemplate.list("-created_date"),
+        base44.entities.OpeningOrderTemplate.list("-created_at"),
         base44.entities.Ingredient.list(null, 10000),
         base44.entities.ProductVariant.list(null, 10000),
         base44.entities.Account.list(),
-        base44.entities.Menu.list("-created_date"),
+        base44.entities.Menu.list("-created_at"),
       ]);
 
       let visibleTemplates = templatesData || [];
@@ -109,7 +109,7 @@ export default function OpeningOrderTemplatesPage() {
       const accountId = params.get("accountId");
       if (menuId && accountId) {
         const [allRecipes, menu] = await Promise.all([
-          base44.entities.Recipe.list("-created_date", 1000),
+          base44.entities.Recipe.list("-created_at", 1000),
           base44.entities.Menu.get(menuId)
         ]);
         

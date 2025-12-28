@@ -57,7 +57,7 @@ export default function EditRecipePage() {
                 Recipe.get(recipeId),
                 Ingredient.list(),
                 Recipe.list(),
-                base44.entities.ProductVariant.list('-created_date', 5000)
+                base44.entities.ProductVariant.list('-created_at', 5000)
             ]);
             
             // Permission check

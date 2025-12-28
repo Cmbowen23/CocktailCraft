@@ -71,7 +71,7 @@ export default function InventoryPage() {
         base44.entities.Location.list(),
         base44.entities.Ingredient.list(),
         base44.entities.ProductVariant.list(),
-        base44.entities.InventoryReport.list("-created_date", 50),
+        base44.entities.InventoryReport.list("-created_at", 50),
         base44.entities.Recipe.list(),
       ]);
       

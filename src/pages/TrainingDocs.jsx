@@ -56,7 +56,7 @@ export default function TrainingDocsPage() {
             if (user) {
                 // Load all needed data in parallel
                 const [docs, accs, ms] = await Promise.all([
-                    base44.entities.TrainingDocument.list("-created_date"),
+                    base44.entities.TrainingDocument.list("-created_at"),
                     base44.entities.Account.list(),
                     base44.entities.Menu.list()
                 ]);

@@ -242,7 +242,7 @@ export default function MenuDetailsPage() {
           console.error("Error loading ingredients:", err);
           return [];
         }),
-        base44.entities.ProductVariant.list("-created_date", 5000).catch(err => {
+        base44.entities.ProductVariant.list("-created_at", 5000).catch(err => {
           console.error("Error loading variants:", err);
           return [];
         }),

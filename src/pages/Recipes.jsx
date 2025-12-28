@@ -181,7 +181,7 @@ export default function RecipesPage() {
       await new Promise(r => setTimeout(r, 50));
 
       // 3. Recipes
-      const recipesData = await base44.entities.Recipe.list('-created_date').catch(err => {
+      const recipesData = await base44.entities.Recipe.list('-created_at').catch(err => {
         console.error("Error loading recipes:", err);
         return [];
       });
@@ -193,7 +193,7 @@ export default function RecipesPage() {
       await new Promise(r => setTimeout(r, 50));
       
       // 4. Variants
-      const variantsData = await base44.entities.ProductVariant.list("-created_date", 5000).catch(err => {
+      const variantsData = await base44.entities.ProductVariant.list("-created_at", 5000).catch(err => {
         console.error("Error loading variants:", err);
         return [];
       });

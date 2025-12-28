@@ -167,7 +167,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     
     try {
       // Fetch all existing product variants to match by SKU
-      const existingVariants = await base44.entities.ProductVariant.list("-created_date", 10000);
+      const existingVariants = await base44.entities.ProductVariant.list("-created_at", 10000);
       setAllProductVariants(existingVariants || []);
       
       setProgress('Grouping ingredients by name...');
