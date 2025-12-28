@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, parseRecipeData } from "@/utils";
 import { convertToMl } from "@/components/utils/costCalculations";
 
 import IngredientForm from "@/components/ingredients/IngredientForm";
@@ -226,7 +226,10 @@ export default function IngredientsPage() {
       });
 
       setAllIngredientsCache(ingredientsWithVariantSkus);
-      setAllRecipes(recipeData || []);
+
+      const parsedRecipes = (recipeData || []).map(recipe => parseRecipeData(recipe));
+      setAllRecipes(parsedRecipes);
+
       setCustomCategories(categoryData || []);
     } catch (err) {
       console.error("Error loading data:", err);
@@ -1026,9 +1029,12 @@ function UsedInRecipesList({ ingredient, allRecipes }) {
       return [];
     }
     const ingredientNameLower = ingredient.name.toLowerCase().trim();
-    return allRecipes.filter(recipe => 
-      recipe.ingredients?.some(ing => ing.ingredient_name?.toLowerCase().trim() === ingredientNameLower)
-    );
+    return allRecipes.filter(recipe => {
+      if (!recipe.ingredients || !Array.isArray(recipe.ingredients)) {
+        return false;
+      }
+      return recipe.ingredients.some(ing => ing.ingredient_name?.toLowerCase().trim() === ingredientNameLower);
+    });
   }, [ingredient, allRecipes]);
 
   const cocktailsUsingIngredient = recipesUsingIngredient.filter(r => !isSubRecipe(r));
