@@ -258,4 +258,17 @@ export const base44 = {
       }
     },
   },
+
+  async raw(query) {
+    try {
+      const { data, error } = await supabase.functions.invoke('execute-sql', {
+        body: { query },
+      })
+      if (error) throw error
+      return data
+    } catch (error) {
+      console.error('Failed to execute raw query:', error)
+      throw error
+    }
+  },
 }
