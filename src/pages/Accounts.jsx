@@ -70,33 +70,32 @@ export default function AccountsPage() {
 
       if (user.role === 'admin') {
         // Admin sees all accounts
-        accountPromise = Account.list("-updated_date");
+        accountPromise = Account.list("-updated_at");
       } else if (['sales_rep', 'on_premise'].includes(user.user_type)) {
         // Sales Rep & On Premise: See assigned accounts OR created accounts OR UserAccountAccess
         const assignedIds = user.assigned_account_ids || [];
 
         accountPromise = Promise.all([
           // 1. Accounts they created or own via owner_user_id
-          Account.filter({ owner_user_id: user.email }, "-updated_date").catch(() => []),
-          Account.filter({ created_by: user.email }, "-updated_date").catch(() => []),
+          Account.filter({ owner_user_id: user.email }).catch(() => []),
 
           // 2. Accounts assigned via old array method
-          assignedIds.length > 0 
-            ? Account.filter({ id: { $in: assignedIds } }, "-updated_date").catch(() => [])
+          assignedIds.length > 0
+            ? Account.filter({ id: { $in: assignedIds } }).catch(() => [])
             : Promise.resolve([]),
 
           // 3. Accounts via UserAccountAccess
           base44.entities.UserAccountAccess.filter({ user_email: user.email }).then(access => {
               if (!access || access.length === 0) return [];
               const ids = access.map(a => a.account_id);
-              return Account.filter({ id: { $in: ids } }, "-updated_date");
+              return Account.filter({ id: { $in: ids } });
           }).catch(() => [])
-        ]).then(([owned, created, assigned, accessible]) => {
+        ]).then(([owned, assigned, accessible]) => {
           // Merge and deduplicate
           const map = new Map();
-          [...owned, ...created, ...assigned, ...accessible].forEach(a => map.set(a.id, a));
-          return Array.from(map.values()).sort((a, b) => 
-            new Date(b.updated_date || 0) - new Date(a.updated_date || 0)
+          [...owned, ...assigned, ...accessible].forEach(a => map.set(a.id, a));
+          return Array.from(map.values()).sort((a, b) =>
+            new Date(b.updated_at || 0) - new Date(a.updated_at || 0)
           );
         });
       } else if (user.user_type === 'buyer_admin') {
@@ -108,8 +107,8 @@ export default function AccountsPage() {
           accountPromise = Promise.resolve([]);
         }
       } else {
-        // Standard Internal User: Only see accounts they created
-        accountPromise = Account.filter({ created_by: user.email }, "-updated_date");
+        // Standard Internal User: See all accounts
+        accountPromise = Account.list("-updated_at");
       }
 
       const [accountData, menuData, tastingData] = await Promise.all([
@@ -117,11 +116,11 @@ export default function AccountsPage() {
           console.error("Error loading accounts:", err);
           return [];
         }),
-        Menu.filter({ created_by: user.email }).catch(err => {
+        Menu.list().catch(err => {
           console.error("Error loading menus:", err);
           return [];
         }),
-        Tasting.filter({ created_by: user.email }).catch(err => {
+        Tasting.list().catch(err => {
           console.error("Error loading tastings:", err);
           return [];
         }),

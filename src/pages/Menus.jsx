@@ -30,7 +30,7 @@ export default function MenusPage() {
         setIsLoading(true);
         try {
             const [menusData, accountsData, recipesData] = await Promise.all([
-                Menu.list("-updated_date", 100),
+                Menu.list("-updated_at", 100),
                 Account.list(),
                 base44.entities.Recipe.list(null, 10000),
             ]);
