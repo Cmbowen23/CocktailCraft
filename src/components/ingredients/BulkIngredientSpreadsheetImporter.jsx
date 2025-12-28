@@ -38,6 +38,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const [error, setError] = useState('');
   const [progress, setProgress] = useState('');
   const [allProductVariants, setAllProductVariants] = useState([]);
+  const [validationWarnings, setValidationWarnings] = useState([]);
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -211,7 +212,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         // Add this row as a variant
         const sizeQty = parseFloat(mappedRow.purchase_quantity) || 0;
         const sizeUnit = (mappedRow.purchase_unit || 'ml').toLowerCase();
-        
+
         // Convert to ml for size_ml field
         let size_ml = sizeQty;
         if (sizeUnit === 'l') {
@@ -221,7 +222,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         } else if (sizeUnit === 'gal') {
           size_ml = sizeQty * 3785.41;
         }
-        
+
         const variantData = {
           sku_number: mappedRow.sku_number || '',
           purchase_price: parseFloat(mappedRow.purchase_price) || 0,
@@ -231,8 +232,28 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
           case_price: mappedRow.case_price ? parseFloat(mappedRow.case_price) : null,
           bottles_per_case: mappedRow.bottles_per_case ? parseFloat(mappedRow.bottles_per_case) : null
         };
-        
-        ingredientGroups[groupKey].variants.push(variantData);
+
+        // Check for duplicate variants within this ingredient before adding
+        const existingVariants = ingredientGroups[groupKey].variants;
+        const normalizedSku = normalizeName(variantData.sku_number);
+
+        // Check if variant already exists by SKU or size
+        const isDuplicate = existingVariants.some(existing => {
+          // Match by SKU if both have SKU
+          if (normalizedSku && normalizeName(existing.sku_number) === normalizedSku) {
+            return true;
+          }
+          // Match by size (within 1ml tolerance)
+          if (variantData.size_ml > 0 && Math.abs(existing.size_ml - variantData.size_ml) < 1) {
+            return true;
+          }
+          return false;
+        });
+
+        // Only add if not a duplicate
+        if (!isDuplicate) {
+          ingredientGroups[groupKey].variants.push(variantData);
+        }
       });
       
       // Helper to compare fields and find changes
@@ -370,6 +391,10 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
       });
       setMergeDecisions(initialDecisions);
 
+      // Validate for within-batch duplicates
+      const warnings = validateBatchForDuplicates(cleanedIngredients);
+      setValidationWarnings(warnings);
+
       setParsedIngredients(cleanedIngredients);
       setStep('confirm');
     } catch (error) {
@@ -382,6 +407,91 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   };
 
   const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Validate ingredients for potential duplicate issues within the batch
+  const validateBatchForDuplicates = (ingredients) => {
+    const warnings = [];
+    const seenSkus = {};
+    const seenIngredientNames = {};
+
+    ingredients.forEach((ing, idx) => {
+      const normalizedName = normalizeName(ing.name);
+
+      // Check for duplicate ingredient names in batch
+      if (seenIngredientNames[normalizedName]) {
+        const firstIdx = seenIngredientNames[normalizedName];
+        const firstIng = ingredients[firstIdx];
+
+        // Only warn if suppliers differ (same name, same supplier is expected grouping)
+        if (normalizeName(ing.supplier) !== normalizeName(firstIng.supplier)) {
+          warnings.push({
+            type: 'duplicate_name',
+            severity: 'warning',
+            message: `"${ing.name}" appears multiple times with different suppliers: "${firstIng.supplier}" and "${ing.supplier}". These will create separate ingredients.`,
+            indices: [firstIdx, idx]
+          });
+        }
+      } else {
+        seenIngredientNames[normalizedName] = idx;
+      }
+
+      // Check for duplicate SKUs within the batch
+      ing.variants.forEach((variant, vIdx) => {
+        if (variant.sku_number) {
+          const normalizedSku = normalizeName(variant.sku_number);
+          if (seenSkus[normalizedSku]) {
+            const existing = seenSkus[normalizedSku];
+            if (existing.ingredientIdx !== idx) {
+              warnings.push({
+                type: 'duplicate_sku',
+                severity: 'warning',
+                message: `SKU "${variant.sku_number}" appears on multiple ingredients: "${ingredients[existing.ingredientIdx].name}" and "${ing.name}". This may indicate a data issue.`,
+                indices: [existing.ingredientIdx, idx]
+              });
+            }
+          } else {
+            seenSkus[normalizedSku] = { ingredientIdx: idx, variantIdx: vIdx };
+          }
+        }
+      });
+
+      // Check for duplicate variants within the same ingredient
+      const variantSizes = {};
+      const variantSkus = {};
+      ing.variants.forEach((variant, vIdx) => {
+        // Check duplicate sizes
+        if (variant.size_ml > 0) {
+          if (variantSizes[variant.size_ml]) {
+            warnings.push({
+              type: 'duplicate_variant_size',
+              severity: 'warning',
+              message: `"${ing.name}" has multiple variants with the same size (${variant.size_ml}ml). Duplicates will be merged.`,
+              indices: [idx]
+            });
+          } else {
+            variantSizes[variant.size_ml] = true;
+          }
+        }
+
+        // Check duplicate SKUs within same ingredient
+        if (variant.sku_number) {
+          const normalizedSku = normalizeName(variant.sku_number);
+          if (variantSkus[normalizedSku]) {
+            warnings.push({
+              type: 'duplicate_variant_sku',
+              severity: 'error',
+              message: `"${ing.name}" has multiple variants with the same SKU "${variant.sku_number}". This will cause issues - please fix your CSV.`,
+              indices: [idx]
+            });
+          } else {
+            variantSkus[normalizedSku] = true;
+          }
+        }
+      });
+    });
+
+    return warnings;
+  };
 
   // *** OPTIMIZED SAVE: skip unchanged, only touch changed variants, recalc cost_per_unit only when needed
   const handleSaveIngredients = async () => {
@@ -428,21 +538,19 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
       try {
         let targetIngredientId = null;
         let existingIngredient = null;
-        
-        // Check merge decision
+
+        // Check merge decision - RESPECT USER'S EXPLICIT CHOICE
         const decision = mergeDecisions[i];
-        if (decision && decision !== 'new') {
+        if (decision === 'new') {
+          // User explicitly chose "Create as new ingredient" - DO NOT merge
+          targetIngredientId = null;
+          existingIngredient = null;
+        } else if (decision && decision !== 'new') {
+          // User chose to merge with a specific ingredient
           targetIngredientId = decision;
           existingIngredient = allIngredients.find(ing => ing.id === decision);
-        } else {
-          // Check for exact name match
-          existingIngredient = allIngredients.find(
-            ing => (ing.name || '').trim().toLowerCase() === (ingredientData.name || '').trim().toLowerCase()
-          );
-          if (existingIngredient) {
-            targetIngredientId = existingIngredient.id;
-          }
         }
+        // If decision is undefined/null, create new ingredient (no automatic matching during save)
         
         // Filter out empty/null values so we don't overwrite existing data with blanks
         const dataToSave = {};
@@ -795,7 +903,42 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
                 <span className="text-green-700">{progress}</span>
               </div>
             )}
-            
+
+            {validationWarnings && validationWarnings.length > 0 && (
+              <div className="space-y-2">
+                {validationWarnings.filter(w => w.severity === 'error').length > 0 && (
+                  <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="font-semibold text-red-800 mb-1">Critical Issues Detected</p>
+                      <p className="text-sm text-red-700">Please fix these errors in your CSV before importing:</p>
+                    </div>
+                  </div>
+                )}
+                <div className="max-h-48 overflow-y-auto space-y-2">
+                  {validationWarnings.map((warning, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex items-start gap-2 p-3 rounded-lg ${
+                        warning.severity === 'error'
+                          ? 'bg-red-50 border border-red-200'
+                          : 'bg-amber-50 border border-amber-200'
+                      }`}
+                    >
+                      <AlertCircle
+                        className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                          warning.severity === 'error' ? 'text-red-500' : 'text-amber-500'
+                        }`}
+                      />
+                      <p className={`text-sm ${warning.severity === 'error' ? 'text-red-700' : 'text-amber-700'}`}>
+                        {warning.message}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div>
               <h3 className="text-lg font-semibold text-emerald-900 mb-4">
                 Ready to import {parsedIngredients.length} unique ingredient{parsedIngredients.length !== 1 ? 's' : ''}
@@ -947,9 +1090,20 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
                                   hasExactMatch ? 'text-blue-700' : 'text-amber-700'
                                 }`}
                               >
-                                {hasExactMatch
-                                  ? `"${ingredient.exactMatch.name}" already exists.`
-                                  : 'This ingredient might already exist with a similar name:'}
+                                {hasExactMatch ? (
+                                  <>
+                                    "{ingredient.exactMatch.name}" already exists
+                                    {ingredient.exactMatch.supplier && ingredient.supplier &&
+                                     normalizeName(ingredient.exactMatch.supplier) !== normalizeName(ingredient.supplier) && (
+                                      <span className="font-semibold text-amber-800">
+                                        {' '}(Different suppliers: existing "{ingredient.exactMatch.supplier}" vs new "{ingredient.supplier}")
+                                      </span>
+                                    )}
+                                    .
+                                  </>
+                                ) : (
+                                  'This ingredient might already exist with a similar name:'
+                                )}
                               </p>
                             </div>
                           </div>
@@ -965,13 +1119,15 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
                             <SelectContent>
                               {hasExactMatch && (
                                 <SelectItem value={ingredient.exactMatch.id}>
-                                  ✓ Update "{ingredient.exactMatch.name}" (Exact Match)
+                                  ✓ Update "{ingredient.exactMatch.name}"
+                                  {ingredient.exactMatch.supplier ? ` [${ingredient.exactMatch.supplier}]` : ''} (Exact Match)
                                 </SelectItem>
                               )}
                               <SelectItem value="new">Create as new ingredient</SelectItem>
                               {ingredient.fuzzyMatches.map((match) => (
                                 <SelectItem key={match.ingredient.id} value={match.ingredient.id}>
-                                  Merge with "{match.ingredient.name}" (
+                                  Merge with "{match.ingredient.name}"
+                                  {match.ingredient.supplier ? ` [${match.ingredient.supplier}]` : ''} (
                                   {Math.round(match.similarity * 100)}% match)
                                 </SelectItem>
                               ))}
@@ -991,7 +1147,7 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
               </Button>
               <Button
                 onClick={handleSaveIngredients}
-                disabled={isProcessing}
+                disabled={isProcessing || (validationWarnings && validationWarnings.some(w => w.severity === 'error'))}
                 className="bg-emerald-600 hover:bg-emerald-700"
               >
                 {isProcessing ? (
@@ -1007,6 +1163,11 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
                 )}
               </Button>
             </div>
+            {validationWarnings && validationWarnings.some(w => w.severity === 'error') && (
+              <div className="text-sm text-red-600 text-right">
+                Cannot import with critical errors. Please fix your CSV and try again.
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
