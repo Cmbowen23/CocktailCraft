@@ -116,7 +116,7 @@ export default function IngredientsPage() {
         retryWithBackoff(() => base44.entities.Ingredient.list('name', 5000)),
         retryWithBackoff(() => base44.entities.Recipe.list()),
         retryWithBackoff(() => base44.entities.IngredientCategory.list()),
-        retryWithBackoff(() => base44.entities.ProductVariant.list('created_date', 5000))
+        retryWithBackoff(() => base44.entities.ProductVariant.list('created_at', 5000))
       ]);
 
       // Check for essential ingredients (Water/Ice) and create if missing (Client-side check to avoid double fetch)
