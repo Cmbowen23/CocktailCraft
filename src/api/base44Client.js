@@ -32,6 +32,7 @@ const TABLE_NAME_MAP = {
   Glassware: 'glassware',
   RecipeCategory: 'recipe_categories',
   Profile: 'profiles',
+  RecipeAuditLog: 'recipe_audit_log',
 }
 
 function createEntityMethods(tableName) {

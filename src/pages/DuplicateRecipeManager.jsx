@@ -1,0 +1,404 @@
+import React, { useState, useEffect } from 'react';
+import { base44 } from '@/api/base44Client';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Loader2,
+  AlertTriangle,
+  ArrowLeft,
+  Copy,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  Eye,
+  GitMerge,
+  Database,
+  Clock,
+  DollarSign,
+  FileText,
+  Image as ImageIcon
+} from "lucide-react";
+import { toast } from "sonner";
+import { Link } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
+
+export default function DuplicateRecipeManager() {
+  const [duplicates, setDuplicates] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [dependencies, setDependencies] = useState({});
+  const [loadingDeps, setLoadingDeps] = useState(false);
+
+  useEffect(() => {
+    loadUser();
+    loadDuplicates();
+  }, []);
+
+  const loadUser = async () => {
+    try {
+      const user = await base44.auth.me();
+      setCurrentUser(user);
+
+      if (user?.role !== 'admin') {
+        toast.error('Admin access required');
+      }
+    } catch (err) {
+      console.error('Failed to load user:', err);
+      toast.error('Failed to verify permissions');
+    }
+  };
+
+  const loadDuplicates = async () => {
+    setIsLoading(true);
+    try {
+      const query = `
+        WITH duplicate_names AS (
+          SELECT LOWER(TRIM(name)) as normalized_name
+          FROM recipes
+          GROUP BY LOWER(TRIM(name))
+          HAVING COUNT(*) > 1
+        )
+        SELECT
+          r.name,
+          json_agg(
+            json_build_object(
+              'id', r.id,
+              'name', r.name,
+              'created_at', r.created_at,
+              'has_ingredients', CASE WHEN jsonb_typeof(r.ingredients) = 'array' AND jsonb_array_length(r.ingredients) > 0 THEN true ELSE false END,
+              'ingredient_count', CASE WHEN jsonb_typeof(r.ingredients) = 'array' THEN jsonb_array_length(r.ingredients) ELSE 0 END,
+              'has_description', CASE WHEN r.description IS NOT NULL AND r.description != '' THEN true ELSE false END,
+              'has_image', CASE WHEN r.image_url IS NOT NULL AND r.image_url != '' THEN true ELSE false END,
+              'image_url', r.image_url,
+              'menu_price', r.menu_price,
+              'category', r.category,
+              'base_spirit', r.base_spirit,
+              'difficulty', r.difficulty,
+              'is_cocktail', r.is_cocktail,
+              'description', r.description
+            ) ORDER BY r.created_at
+          ) as versions
+        FROM recipes r
+        WHERE LOWER(TRIM(r.name)) IN (SELECT normalized_name FROM duplicate_names)
+        GROUP BY r.name
+        ORDER BY COUNT(*) DESC, r.name;
+      `;
+
+      const result = await base44.raw(query);
+      setDuplicates(result || []);
+    } catch (err) {
+      console.error('Failed to load duplicates:', err);
+      toast.error('Failed to load duplicate recipes');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const checkDependencies = async (recipeId) => {
+    setLoadingDeps(true);
+    try {
+      const [ingredientCheck, menuCheck] = await Promise.all([
+        base44.raw(`
+          SELECT COUNT(*) as count, json_agg(name) as names
+          FROM ingredients
+          WHERE sub_recipe_id = '${recipeId}';
+        `),
+        base44.raw(`
+          SELECT COUNT(*) as count, json_agg(name) as names
+          FROM menus
+          WHERE id IN (
+            SELECT menu_id FROM recipes WHERE id = '${recipeId}'
+          );
+        `)
+      ]);
+
+      const deps = {
+        usedInIngredients: ingredientCheck[0]?.count || 0,
+        ingredientNames: ingredientCheck[0]?.names || [],
+        usedInMenus: menuCheck[0]?.count || 0,
+        menuNames: menuCheck[0]?.names || []
+      };
+
+      setDependencies(prev => ({
+        ...prev,
+        [recipeId]: deps
+      }));
+
+      return deps;
+    } catch (err) {
+      console.error('Failed to check dependencies:', err);
+      toast.error('Failed to check recipe dependencies');
+      return null;
+    } finally {
+      setLoadingDeps(false);
+    }
+  };
+
+  const deleteRecipe = async (recipeId, recipeName, reason = '') => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      toast.error('Admin access required');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${recipeName}"?\n\nThis action will be logged and can be reviewed in the audit log.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const recipe = await base44.entities.Recipe.get(recipeId);
+
+      await base44.raw(`
+        INSERT INTO recipe_audit_log (recipe_id, action, recipe_data, performed_by, reason)
+        VALUES (
+          '${recipeId}',
+          'deleted',
+          '${JSON.stringify(recipe).replace(/'/g, "''")}',
+          '${currentUser.id}',
+          '${reason.replace(/'/g, "''")}'
+        );
+      `);
+
+      await base44.entities.Recipe.delete(recipeId);
+
+      toast.success('Recipe deleted and logged');
+      loadDuplicates();
+
+      if (selectedGroup) {
+        const updatedVersions = selectedGroup.versions.filter(v => v.id !== recipeId);
+        if (updatedVersions.length > 0) {
+          setSelectedGroup({ ...selectedGroup, versions: updatedVersions });
+        } else {
+          setSelectedGroup(null);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete recipe:', err);
+      toast.error('Failed to delete recipe: ' + err.message);
+    }
+  };
+
+  const getDataCompleteness = (version) => {
+    let score = 0;
+    if (version.has_ingredients) score += 40;
+    if (version.has_description) score += 20;
+    if (version.has_image) score += 20;
+    if (version.menu_price) score += 10;
+    if (version.category) score += 5;
+    if (version.difficulty) score += 5;
+    return score;
+  };
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white p-4 md:p-8 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (currentUser.role !== 'admin') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white p-4 md:p-8 flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardContent className="pt-6">
+            <Alert className="bg-red-50 border-red-200">
+              <AlertTriangle className="w-4 h-4 text-red-600" />
+              <AlertDescription>
+                <span className="font-semibold text-red-800">Access Denied</span>
+                <p className="text-sm text-red-700 mt-2">
+                  Only administrators can access the duplicate recipe manager.
+                </p>
+              </AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white p-4 md:p-8">
+      <div className="max-w-7xl mx-auto">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <Link to={createPageUrl('admin-users')}>
+              <Button variant="ghost" size="sm" className="mb-2">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Admin
+              </Button>
+            </Link>
+            <h1 className="text-3xl font-bold text-gray-900">Duplicate Recipe Manager</h1>
+            <p className="text-gray-600 mt-1">
+              Review and safely manage duplicate recipes
+            </p>
+          </div>
+          <Button onClick={loadDuplicates} variant="outline" disabled={isLoading}>
+            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+            Refresh
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+          </div>
+        ) : duplicates.length === 0 ? (
+          <Card>
+            <CardContent className="py-12 text-center">
+              <CheckCircle2 className="w-12 h-12 text-green-600 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No Duplicates Found</h3>
+              <p className="text-gray-600">All recipes have unique names.</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            <Alert className="bg-yellow-50 border-yellow-200">
+              <AlertTriangle className="w-4 h-4 text-yellow-600" />
+              <AlertDescription>
+                <span className="font-semibold text-yellow-800">Found {duplicates.length} duplicate recipe groups</span>
+                <p className="text-sm text-yellow-700 mt-1">
+                  Review each group carefully before deleting. All deletions are logged and can be audited.
+                </p>
+              </AlertDescription>
+            </Alert>
+
+            {duplicates.map((group) => (
+              <Card key={group.name} className="overflow-hidden">
+                <CardHeader className="bg-gray-50 border-b">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-xl">{group.name}</CardTitle>
+                      <CardDescription>
+                        {group.versions.length} versions found
+                      </CardDescription>
+                    </div>
+                    <Badge variant="destructive" className="text-sm">
+                      <Copy className="w-3 h-3 mr-1" />
+                      {group.versions.length} duplicates
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {group.versions.map((version) => {
+                      const completeness = getDataCompleteness(version);
+                      const deps = dependencies[version.id];
+
+                      return (
+                        <Card key={version.id} className="border-2">
+                          <CardHeader className="pb-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <Badge
+                                  variant={completeness >= 70 ? "default" : completeness >= 40 ? "secondary" : "outline"}
+                                  className="mb-2"
+                                >
+                                  {completeness}% complete
+                                </Badge>
+                                <p className="text-xs text-gray-500 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {new Date(version.created_at).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            <div className="space-y-2 text-sm">
+                              <div className="flex items-center gap-2">
+                                {version.has_ingredients ? (
+                                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-red-600" />
+                                )}
+                                <span className="text-gray-600">
+                                  {version.ingredient_count || 0} ingredients
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {version.has_description ? (
+                                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-red-600" />
+                                )}
+                                <span className="text-gray-600">Description</span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {version.has_image ? (
+                                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-red-600" />
+                                )}
+                                <span className="text-gray-600">Image</span>
+                              </div>
+
+                              {version.menu_price && (
+                                <div className="flex items-center gap-2">
+                                  <DollarSign className="w-4 h-4 text-green-600" />
+                                  <span className="text-gray-600">${version.menu_price}</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {deps && (
+                              <Alert className={deps.usedInIngredients > 0 || deps.usedInMenus > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}>
+                                <AlertDescription className="text-xs">
+                                  {deps.usedInIngredients > 0 && (
+                                    <p className="text-red-700">Used in {deps.usedInIngredients} ingredients</p>
+                                  )}
+                                  {deps.usedInMenus > 0 && (
+                                    <p className="text-red-700">On {deps.usedInMenus} menus</p>
+                                  )}
+                                  {deps.usedInIngredients === 0 && deps.usedInMenus === 0 && (
+                                    <p className="text-green-700">No dependencies</p>
+                                  )}
+                                </AlertDescription>
+                              </Alert>
+                            )}
+
+                            <div className="flex gap-2 pt-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1"
+                                onClick={() => checkDependencies(version.id)}
+                                disabled={loadingDeps}
+                              >
+                                {loadingDeps ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Eye className="w-3 h-3" />
+                                )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                className="flex-1"
+                                onClick={() => deleteRecipe(version.id, version.name, 'Duplicate cleanup')}
+                                disabled={deps && (deps.usedInIngredients > 0 || deps.usedInMenus > 0)}
+                              >
+                                <Trash2 className="w-3 h-3 mr-1" />
+                                Delete
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

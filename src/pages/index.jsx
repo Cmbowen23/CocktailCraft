@@ -13,6 +13,7 @@ import CreateRecipe from './CreateRecipe.jsx';
 import CreateSubRecipe from './CreateSubRecipe.jsx';
 import CustomerMenuPreview from './CustomerMenuPreview.jsx';
 import Dashboard from './Dashboard.jsx';
+import DuplicateRecipeManager from './DuplicateRecipeManager.jsx';
 import EditRecipe from './EditRecipe.jsx';
 import ImageUploadAudit from './ImageUploadAudit.jsx';
 import IngredientSync from './IngredientSync.jsx';
@@ -47,6 +48,7 @@ const PAGES = {
   CreateSubRecipe,
   CustomerMenuPreview,
   Dashboard,
+  DuplicateRecipeManager,
   EditRecipe,
   ImageUploadAudit,
   IngredientSync,
@@ -109,6 +111,7 @@ function PagesContent() {
         <Route path="/createsubrecipe" element={<CreateSubRecipe />} />
         <Route path="/customermenupreview" element={<CustomerMenuPreview />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/duplicaterecipemanager" element={<DuplicateRecipeManager />} />
         <Route path="/editrecipe" element={<EditRecipe />} />
         <Route path="/imageuploadaudit" element={<ImageUploadAudit />} />
         <Route path="/ingredientsync" element={<IngredientSync />} />

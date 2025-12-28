@@ -63,6 +63,8 @@ export const RecipeCategory = base44.entities.RecipeCategory;
 
 export const Profile = base44.entities.Profile;
 
+export const RecipeAuditLog = base44.entities.RecipeAuditLog;
+
 export const User = {
   ...base44.auth,
   list: async () => {

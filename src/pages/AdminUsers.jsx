@@ -13,12 +13,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { 
-  Users, 
-  Search, 
-  Loader2, 
-  Shield, 
-  Building2, 
+import {
+  Users,
+  Search,
+  Loader2,
+  Shield,
+  Building2,
   Mail,
   Wine,
   AlertTriangle,
@@ -27,10 +27,13 @@ import {
   Edit,
   Lock,
   QrCode,
-  Send
+  Send,
+  Copy
   } from "lucide-react";
 import EditUserModal from "@/components/admin/EditUserModal";
 import InviteUserModal from "@/components/admin/InviteUserModal";
+import { Link } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState([]);
@@ -322,10 +325,18 @@ export default function AdminUsersPage() {
           </div>
           <div className="flex justify-between items-end">
             <p className="text-gray-600">View and manage user access across the platform</p>
-            <Button onClick={() => setShowInviteModal(true)} className="bg-blue-600 hover:bg-blue-700">
-              <Mail className="w-4 h-4 mr-2" />
-              Invite User
-            </Button>
+            <div className="flex gap-2">
+              <Link to={createPageUrl('duplicate-recipe-manager')}>
+                <Button variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50">
+                  <Copy className="w-4 h-4 mr-2" />
+                  Manage Duplicates
+                </Button>
+              </Link>
+              <Button onClick={() => setShowInviteModal(true)} className="bg-blue-600 hover:bg-blue-700">
+                <Mail className="w-4 h-4 mr-2" />
+                Invite User
+              </Button>
+            </div>
           </div>
         </div>
 
