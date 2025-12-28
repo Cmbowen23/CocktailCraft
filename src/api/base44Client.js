@@ -195,10 +195,14 @@ export const base44 = {
     },
 
     async signInWithGoogle() {
+      const redirectUrl = import.meta.env.VITE_APP_URL
+        ? `${import.meta.env.VITE_APP_URL}/auth/callback`
+        : `${window.location.origin}/auth/callback`;
+
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: redirectUrl,
         },
       })
       if (error) throw error
