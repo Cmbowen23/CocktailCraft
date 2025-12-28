@@ -5,7 +5,7 @@ import RecipeForm from "../components/recipes/RecipeForm";
 import AddIngredientModal from "../components/ingredients/AddIngredientModal";
 import { Link, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, parseRecipeData } from "@/utils";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ingredientCategories } from '../components/utils/categoryDefinitions';
@@ -59,11 +59,15 @@ export default function EditRecipePage() {
                 Recipe.list(),
                 base44.entities.ProductVariant.list('-created_at', 5000)
             ]);
-            
+
+            // Parse recipe JSON fields
+            const parsedRecipe = parseRecipeData(recipeData);
+            const parsedRecipes = (recipesData || []).map(r => parseRecipeData(r));
+
             // Permission check
-            if (recipeData && user) {
+            if (parsedRecipe && user) {
                 const isAdmin = user.role === 'admin';
-                const isCreator = recipeData.created_by === user.email;
+                const isCreator = parsedRecipe.created_by === user.email;
                 if (!isAdmin && !isCreator) {
                     setError("You do not have permission to edit this recipe.");
                     setRecipe(null);
@@ -79,9 +83,9 @@ export default function EditRecipePage() {
                 return { ...ing, variants };
             });
 
-            setRecipe(recipeData);
+            setRecipe(parsedRecipe);
             setAllIngredients(enrichedIngredients);
-            setAllRecipes(recipesData || []);
+            setAllRecipes(parsedRecipes);
         } catch (err) {
             console.error("Failed to load data:", err);
             setError("Failed to load recipe data.");

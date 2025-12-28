@@ -26,7 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import CocktailLoader from "@/components/ui/CocktailLoader";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, parseRecipeData } from "@/utils";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cocktailCategories, ingredientCategories } from '../components/utils/categoryDefinitions';
 import { useLocation, Link } from 'react-router-dom';
@@ -185,9 +185,10 @@ export default function RecipesPage() {
         console.error("Error loading recipes:", err);
         return [];
       });
-      
-      // CRITICAL: Enrich recipes with ingredient_id and prep_action_id
-      const enrichedRecipes = (recipesData || []).map(recipe => enrichRecipeWithIds(recipe, ingredientsData || []));
+
+      // CRITICAL: Parse JSON fields first, then enrich recipes with ingredient_id and prep_action_id
+      const parsedRecipes = (recipesData || []).map(recipe => parseRecipeData(recipe));
+      const enrichedRecipes = parsedRecipes.map(recipe => enrichRecipeWithIds(recipe, ingredientsData || []));
       setRecipes(enrichedRecipes);
       
       await new Promise(r => setTimeout(r, 50));
