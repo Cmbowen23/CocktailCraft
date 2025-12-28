@@ -124,6 +124,7 @@ export default function DashboardPage() {
     try {
       const user = await fetchUserWithRetry();
       if (!user) {
+        console.log("No user found, skipping data load");
         setAccounts([]);
         setMenus([]);
         setTastings([]);
@@ -132,12 +133,15 @@ export default function DashboardPage() {
         return;
       }
 
+      console.log("Loading data for user:", user.email);
+
       // Serialized requests with retry logic and delays to prevent rate limiting
 
       const accountsData = await retryWithBackoff(() => Account.list()).catch(err => {
         console.error("Error loading accounts:", err);
         return [];
       });
+      console.log("Loaded accounts:", accountsData?.length || 0);
       setAccounts(accountsData || []);
       await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -145,6 +149,7 @@ export default function DashboardPage() {
         console.error("Error loading menus:", err);
         return [];
       });
+      console.log("Loaded menus:", menusData?.length || 0);
       setMenus(menusData || []);
       await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -152,6 +157,7 @@ export default function DashboardPage() {
         console.error("Error loading tastings:", err);
         return [];
       });
+      console.log("Loaded tastings:", tastingsData?.length || 0);
       setTastings(tastingsData || []);
       await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -159,6 +165,7 @@ export default function DashboardPage() {
         console.error("Error loading tasks:", err);
         return [];
       });
+      console.log("Loaded tasks:", tasksData?.length || 0);
       setTasks(tasksData || []);
     } catch (err) {
       console.error("Error loading dashboard data:", err);
