@@ -273,6 +273,9 @@ export default function IngredientForm({
     if (!Array.isArray(initialIngredient.prep_actions)) {
       initialIngredient.prep_actions = [];
     }
+    if (!Array.isArray(initialIngredient.aliases)) {
+      initialIngredient.aliases = [];
+    }
     if (!Array.isArray(initialIngredient.custom_conversions)) {
       initialIngredient.custom_conversions = [];
     } else {

@@ -35,25 +35,41 @@ const TABLE_NAME_MAP = {
   RecipeAuditLog: 'recipe_audit_log',
 }
 
+const BATCH_SIZE = 1000
+
 function createEntityMethods(tableName) {
   return {
     async list(orderBy = '-created_at', limit = 10000) {
-      let query = supabase.from(tableName).select('*')
+      const ascending = orderBy ? !orderBy.startsWith('-') : false
+      const column = orderBy ? (ascending ? orderBy : orderBy.substring(1)) : 'created_at'
 
-      if (orderBy) {
-        const ascending = !orderBy.startsWith('-')
-        const column = ascending ? orderBy : orderBy.substring(1)
-        query = query.order(column, { ascending })
+      const allData = []
+      let from = 0
+      let hasMore = true
+
+      while (hasMore && allData.length < limit) {
+        const to = Math.min(from + BATCH_SIZE - 1, limit - 1)
+
+        let query = supabase
+          .from(tableName)
+          .select('*')
+          .order(column, { ascending })
+          .range(from, to)
+
+        const { data, error } = await query
+
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allData.push(...data)
+          from += BATCH_SIZE
+          hasMore = data.length === BATCH_SIZE
+        } else {
+          hasMore = false
+        }
       }
 
-      if (limit) {
-        query = query.limit(limit)
-      }
-
-      const { data, error } = await query
-
-      if (error) throw error
-      return data || []
+      return allData
     },
 
     async get(id) {
@@ -101,20 +117,36 @@ function createEntityMethods(tableName) {
     },
 
     async filter(filters, limit = 10000) {
-      let query = supabase.from(tableName).select('*')
+      const allData = []
+      let from = 0
+      let hasMore = true
 
-      Object.entries(filters).forEach(([key, value]) => {
-        query = query.eq(key, value)
-      })
+      while (hasMore && allData.length < limit) {
+        const to = Math.min(from + BATCH_SIZE - 1, limit - 1)
 
-      if (limit) {
-        query = query.limit(limit)
+        let query = supabase
+          .from(tableName)
+          .select('*')
+          .range(from, to)
+
+        Object.entries(filters).forEach(([key, value]) => {
+          query = query.eq(key, value)
+        })
+
+        const { data, error } = await query
+
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allData.push(...data)
+          from += BATCH_SIZE
+          hasMore = data.length === BATCH_SIZE
+        } else {
+          hasMore = false
+        }
       }
 
-      const { data, error } = await query
-
-      if (error) throw error
-      return data || []
+      return allData
     },
   }
 }
