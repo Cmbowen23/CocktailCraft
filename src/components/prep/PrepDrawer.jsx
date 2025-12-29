@@ -155,7 +155,7 @@ export default function PrepDrawer({ task, onClose, onUpdateTask }) {
         try {
             const [recipeData, ingredientsData] = await Promise.all([
                 base44.entities.Recipe.get(recipeId),
-                base44.entities.Ingredient.list(null, 2000)
+                base44.entities.Ingredient.list()
             ]);
             setRecipe(recipeData);
             setAllIngredients(ingredientsData || []);

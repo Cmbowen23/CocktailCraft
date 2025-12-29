@@ -37,7 +37,7 @@ const TABLE_NAME_MAP = {
 
 function createEntityMethods(tableName) {
   return {
-    async list(orderBy = '-created_at', limit = 1000) {
+    async list(orderBy = '-created_at', limit = 10000) {
       let query = supabase.from(tableName).select('*')
 
       if (orderBy) {
@@ -100,7 +100,7 @@ function createEntityMethods(tableName) {
       return { success: true }
     },
 
-    async filter(filters, limit = 1000) {
+    async filter(filters, limit = 10000) {
       let query = supabase.from(tableName).select('*')
 
       Object.entries(filters).forEach(([key, value]) => {

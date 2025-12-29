@@ -109,7 +109,7 @@ export default function OpeningOrderTemplatesPage() {
       const accountId = params.get("accountId");
       if (menuId && accountId) {
         const [allRecipes, menu] = await Promise.all([
-          base44.entities.Recipe.list("-created_at", 1000),
+          base44.entities.Recipe.list("-created_at"),
           base44.entities.Menu.get(menuId)
         ]);
         

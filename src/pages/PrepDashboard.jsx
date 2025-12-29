@@ -55,7 +55,7 @@ export default function PrepDashboardPage() {
 
             // Fetch Recipes & Account Menus
             const [allRecipes, accountMenus] = await Promise.all([
-                base44.entities.Recipe.list(null, 2000),
+                base44.entities.Recipe.list(),
                 user.account_id ? base44.entities.Menu.filter({ account_id: user.account_id }) : Promise.resolve([])
             ]);
 
