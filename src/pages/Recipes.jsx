@@ -246,20 +246,19 @@ export default function RecipesPage() {
   const loadAndSelectDuplicates = async () => {
     setIsLoadingDuplicates(true);
     try {
-      const query = `
-        WITH duplicate_names AS (
-          SELECT LOWER(TRIM(name)) as normalized_name
-          FROM recipes
-          GROUP BY LOWER(TRIM(name))
-          HAVING COUNT(*) > 1
-        )
-        SELECT r.id
-        FROM recipes r
-        WHERE LOWER(TRIM(r.name)) IN (SELECT normalized_name FROM duplicate_names);
-      `;
+      const nameGroupMap = {};
 
-      const result = await base44.raw(query);
-      const duplicateIds = (result || []).map(r => r.id);
+      recipes.forEach(recipe => {
+        const normalizedName = (recipe.name || "").toLowerCase().trim();
+        if (!nameGroupMap[normalizedName]) {
+          nameGroupMap[normalizedName] = [];
+        }
+        nameGroupMap[normalizedName].push(recipe.id);
+      });
+
+      const duplicateIds = Object.values(nameGroupMap)
+        .filter(ids => ids.length > 1)
+        .flat();
 
       if (duplicateIds.length === 0) {
         toast.info("No duplicate recipes found");
@@ -296,16 +295,13 @@ export default function RecipesPage() {
         try {
           const recipe = await base44.entities.Recipe.get(recipeId);
 
-          await base44.raw(`
-            INSERT INTO recipe_audit_log (recipe_id, action, recipe_data, performed_by, reason)
-            VALUES (
-              '${recipeId}',
-              'deleted',
-              '${JSON.stringify(recipe).replace(/'/g, "''")}',
-              '${currentUser.id}',
-              'Bulk duplicate deletion'
-            );
-          `);
+          await base44.entities.RecipeAuditLog.create({
+            recipe_id: recipeId,
+            action: 'deleted',
+            recipe_data: recipe,
+            performed_by: currentUser.id,
+            reason: 'Bulk duplicate deletion'
+          });
 
           await base44.entities.Recipe.delete(recipeId);
           successCount++;
