@@ -33,9 +33,6 @@ import CustomerMenuBuilder from "../components/menus/CustomerMenuBuilder";
 import ShareMenuModal from '../components/menus/ShareMenuModal';
 import { isAlcoholicIngredient } from "../components/utils/categoryDefinitions";
 import { findMatchingIngredient } from "../components/utils/costCalculations";
-// TEMP HACK: define Package to stop runtime error if anything still references it
-const Package = () => null;
-
 
 // Helper function to retry base44.auth.me() with exponential backoff
 const fetchUserWithRetry = async (maxAttempts = 3) => {
