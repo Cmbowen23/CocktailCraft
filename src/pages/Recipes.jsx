@@ -139,12 +139,24 @@ export default function RecipesPage() {
       let displayName = ing.ingredient_name || matchedIng.name;
       let ingredientId = matchedIng.id;
       let prepActionId = null;
-      
+
       if (prepActionNameFromText && matchedIng.prep_actions) {
-        const matchedPrep = matchedIng.prep_actions.find(p => p.name === prepActionNameFromText);
-        if (matchedPrep) {
-          prepActionId = matchedPrep.id;
-          displayName = `${matchedIng.name} - ${matchedPrep.name}`;
+        // Parse prep_actions if it's a JSON string
+        let prepActions = matchedIng.prep_actions;
+        if (typeof prepActions === 'string') {
+          try {
+            prepActions = JSON.parse(prepActions);
+          } catch (e) {
+            prepActions = [];
+          }
+        }
+
+        if (Array.isArray(prepActions)) {
+          const matchedPrep = prepActions.find(p => p.name === prepActionNameFromText);
+          if (matchedPrep) {
+            prepActionId = matchedPrep.id;
+            displayName = `${matchedIng.name} - ${matchedPrep.name}`;
+          }
         }
       }
       
