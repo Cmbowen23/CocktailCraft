@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,7 +16,10 @@ import {
   Images,
   ChevronDown,
   FlaskConical,
-  BookOpen
+  BookOpen,
+  Copy,
+  Loader2,
+  Trash2
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -86,6 +90,9 @@ export default function RecipesPage() {
   const [initialCreationMode, setInitialCreationMode] = useState(null);
   const [showPrepDrawer, setShowPrepDrawer] = useState(false);
   const [prepTask, setPrepTask] = useState(null);
+  const [isDuplicateSelectionMode, setIsDuplicateSelectionMode] = useState(false);
+  const [isLoadingDuplicates, setIsLoadingDuplicates] = useState(false);
+  const [isDeletingRecipes, setIsDeletingRecipes] = useState(false);
 
   const saveScrollPosition = () => {
     setScrollPosition(window.scrollY);
@@ -233,6 +240,96 @@ export default function RecipesPage() {
       setAllIngredients(ingredientsData || []);
     } catch (err) {
       console.error("Error loading ingredients:", err);
+    }
+  };
+
+  const loadAndSelectDuplicates = async () => {
+    setIsLoadingDuplicates(true);
+    try {
+      const query = `
+        WITH duplicate_names AS (
+          SELECT LOWER(TRIM(name)) as normalized_name
+          FROM recipes
+          GROUP BY LOWER(TRIM(name))
+          HAVING COUNT(*) > 1
+        )
+        SELECT r.id
+        FROM recipes r
+        WHERE LOWER(TRIM(r.name)) IN (SELECT normalized_name FROM duplicate_names);
+      `;
+
+      const result = await base44.raw(query);
+      const duplicateIds = (result || []).map(r => r.id);
+
+      if (duplicateIds.length === 0) {
+        toast.info("No duplicate recipes found");
+        return;
+      }
+
+      setSelectedRecipeIds(duplicateIds);
+      setSelectionMode(true);
+      setIsDuplicateSelectionMode(true);
+      toast.success(`Selected ${duplicateIds.length} duplicate recipes`);
+    } catch (err) {
+      console.error("Error loading duplicates:", err);
+      toast.error("Failed to load duplicate recipes");
+    } finally {
+      setIsLoadingDuplicates(false);
+    }
+  };
+
+  const bulkDeleteDuplicates = async () => {
+    if (selectedRecipeIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Delete ${selectedRecipeIds.length} duplicate recipes? This action cannot be undone and will be logged.`
+    );
+
+    if (!confirmed) return;
+
+    setIsDeletingRecipes(true);
+    try {
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const recipeId of selectedRecipeIds) {
+        try {
+          const recipe = await base44.entities.Recipe.get(recipeId);
+
+          await base44.raw(`
+            INSERT INTO recipe_audit_log (recipe_id, action, recipe_data, performed_by, reason)
+            VALUES (
+              '${recipeId}',
+              'deleted',
+              '${JSON.stringify(recipe).replace(/'/g, "''")}',
+              '${currentUser.id}',
+              'Bulk duplicate deletion'
+            );
+          `);
+
+          await base44.entities.Recipe.delete(recipeId);
+          successCount++;
+        } catch (err) {
+          console.error(`Failed to delete recipe ${recipeId}:`, err);
+          failCount++;
+        }
+      }
+
+      await loadData();
+      setSelectedRecipeIds([]);
+      setSelectionMode(false);
+      setIsDuplicateSelectionMode(false);
+
+      if (failCount === 0) {
+        toast.success(`Deleted ${successCount} recipes`);
+      } else {
+        toast.warning(`Deleted ${successCount}, failed to delete ${failCount}`);
+      }
+    } catch (err) {
+      console.error("Error bulk deleting recipes:", err);
+      toast.error("Error during bulk delete");
+    } finally {
+      setIsDeletingRecipes(false);
     }
   };
 
@@ -408,6 +505,12 @@ export default function RecipesPage() {
                   <Button variant="ghost" size="sm" onClick={() => setDisplayMode("gallery")} className={`h-7 px-2 sm:px-3 ${displayMode === "gallery" ? "bg-white shadow-sm text-blue-600" : "text-gray-500 hover:text-gray-700 hover:bg-gray-200"}`} title="Gallery View"><Images className="w-4 h-4" /></Button>
                   <Button variant="ghost" size="sm" onClick={() => setShowBookView(true)} className="h-7 px-2 sm:px-3 text-gray-500 hover:text-gray-700 hover:bg-gray-200" title="Book View"><BookOpen className="w-4 h-4" /></Button>
                 </div>
+                {!selectionMode && !isDuplicateSelectionMode && (
+                  <Button variant="outline" onClick={loadAndSelectDuplicates} size="sm" disabled={isLoadingDuplicates} className="border-gray-300 text-gray-700 hover:bg-gray-50 flex-1 sm:flex-none">
+                    {isLoadingDuplicates ? <Loader2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 animate-spin" /> : <Copy className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />}
+                    <span className="hidden xs:inline">Duplicates</span>
+                  </Button>
+                )}
                 <Button variant={selectionMode ? "default" : "outline"} onClick={handleToggleSelectionMode} size="sm" className={`${selectionMode ? "bg-blue-600 hover:bg-blue-700" : "border-gray-300 text-gray-700 hover:bg-gray-50"} flex-1 sm:flex-none`} disabled={!!tastingId}>
                   {selectionMode ? <><X className="w-3 h-3 sm:w-4 sm:h-4 mr-1" /><span>Exit</span></> : <><MousePointer className="w-3 h-3 sm:w-4 sm:h-4 mr-1" /><span>Select</span></>}
                 </Button>
@@ -562,11 +665,21 @@ export default function RecipesPage() {
       <AnimatePresence>
         {selectedRecipeIds.length > 0 && (
           <motion.div initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }} className="fixed bottom-0 left-0 right-0 z-50 p-3">
-            <div className="bg-white/95 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-200 p-3 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-sm mx-auto">
+            <div className="bg-white/95 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-200 p-3 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-2xl mx-auto">
               <p className="font-semibold text-gray-800 text-sm text-center sm:text-left">{selectedRecipeIds.length} selected</p>
-              <Button onClick={() => setIsAddToMenuModalOpen(true)} size="sm" className="bg-blue-600 hover:bg-blue-700 w-full sm:w-auto">
-                <ListPlus className="w-4 h-4 mr-2" />Add to Menu
-              </Button>
+              <div className="flex gap-2 w-full sm:w-auto">
+                {!isDuplicateSelectionMode && (
+                  <Button onClick={() => setIsAddToMenuModalOpen(true)} size="sm" className="bg-blue-600 hover:bg-blue-700 flex-1 sm:flex-none">
+                    <ListPlus className="w-4 h-4 mr-2" />Add to Menu
+                  </Button>
+                )}
+                {isDuplicateSelectionMode && (
+                  <Button onClick={bulkDeleteDuplicates} size="sm" variant="destructive" disabled={isDeletingRecipes} className="flex-1 sm:flex-none">
+                    {isDeletingRecipes ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                    Delete Selected
+                  </Button>
+                )}
+              </div>
             </div>
           </motion.div>
         )}
