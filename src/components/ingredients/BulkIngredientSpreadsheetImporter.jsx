@@ -176,17 +176,38 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
 
       const columnAliases = {
         'sku_numb': 'sku_number',
+        'sku_numbe': 'sku_number',
         'sku': 'sku_number',
         'bottles_per': 'bottles_per_case',
+        'bottles_pe': 'bottles_per_case',
         'bottles': 'bottles_per_case',
         'bottle_price': 'purchase_price',
         'price': 'purchase_price',
+        'purchase_p': 'purchase_price',
+        'purchase_pr': 'purchase_price',
         'size': 'variant_size',
         'bottle_size': 'variant_size',
+        'variant_si': 'variant_size',
+        'variant_siz': 'variant_size',
         'image_url': 'bottle_image_url',
         'image': 'bottle_image_url',
+        'bottle_ima': 'bottle_image_url',
+        'bottle_imag': 'bottle_image_url',
         'type': 'spirit_type',
-        'spirit': 'spirit_type'
+        'spirit': 'spirit_type',
+        'spirit_typ': 'spirit_type',
+        'spirit_ty': 'spirit_type',
+        'use_case_p': 'use_case_pricing',
+        'use_case_j': 'use_case_pricing',
+        'use_case': 'use_case_pricing',
+        'case_pric': 'case_price',
+        'case_pri': 'case_price',
+        'purchase_q': 'purchase_quantity',
+        'purchase_qu': 'purchase_quantity',
+        'purchase_u': 'purchase_unit',
+        'purchase_un': 'purchase_unit',
+        'descriptio': 'description',
+        'desc': 'description'
       };
 
       const initialMappings = {};
@@ -216,43 +237,64 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     }
   };
 
+  const isAuthError = (error) => {
+    if (!error) return false;
+    const message = (error.message || '').toLowerCase();
+    const code = error.code || '';
+    return message.includes('jwt expired') ||
+           message.includes('unauthorized') ||
+           message.includes('not authenticated') ||
+           message.includes('invalid token') ||
+           code === 'PGRST301' ||
+           code === 'PGRST303';
+  };
+
   const handleConfirmMappings = async () => {
     setIsProcessing(true);
     setError('');
     setProgress('Loading existing product variants...');
 
     try {
-      // Fetch all existing product variants to match by SKU
-      let existingVariants;
+      let existingVariants = [];
       try {
         existingVariants = await base44.entities.ProductVariant.list("-created_at", 10000);
       } catch (variantError) {
+        if (isAuthError(variantError)) {
+          throw new Error('Your session has expired. Please refresh the page and log in again.');
+        }
         console.warn('Failed to fetch variants with ordering, trying without ordering:', variantError);
-        // Fallback: try without ordering if the column name causes issues
-        existingVariants = await base44.entities.ProductVariant.list(null, 10000);
+        try {
+          existingVariants = await base44.entities.ProductVariant.list(null, 10000);
+        } catch (fallbackError) {
+          if (isAuthError(fallbackError)) {
+            throw new Error('Your session has expired. Please refresh the page and log in again.');
+          }
+          console.warn('Could not fetch product variants, proceeding without them:', fallbackError);
+          existingVariants = [];
+        }
       }
       setAllProductVariants(existingVariants || []);
       
       setProgress('Grouping ingredients by name...');
       const rows = parsedRows;
-      
-      // Group rows by ingredient name (case-insensitive) + supplier
+
       const ingredientGroups = {};
-      
-      rows.forEach(row => {
-        const mappedRow = {};
-        Object.entries(columnMappings).forEach(([field, csvColumn]) => {
-          if (csvColumn && csvColumn !== '__unmapped__' && row[csvColumn] !== undefined) {
-            mappedRow[field] = row[csvColumn];
-          }
-        });
-        
-        const name = mappedRow.name?.trim() || '';
-        const supplier = mappedRow.supplier?.trim() || '';
-        if (!name) return; // Skip rows without a name
-        
-        // Group by name + supplier to handle same product from different suppliers
-        const groupKey = `${name.toLowerCase()}|${supplier.toLowerCase()}`;
+      const rowErrors = [];
+
+      rows.forEach((row, rowIndex) => {
+        try {
+          const mappedRow = {};
+          Object.entries(columnMappings).forEach(([field, csvColumn]) => {
+            if (csvColumn && csvColumn !== '__unmapped__' && row[csvColumn] !== undefined) {
+              mappedRow[field] = row[csvColumn];
+            }
+          });
+
+          const name = (mappedRow.name || '').toString().trim();
+          const supplier = (mappedRow.supplier || '').toString().trim();
+          if (!name) return;
+
+          const groupKey = `${name.toLowerCase()}|${supplier.toLowerCase()}`;
         
         if (!ingredientGroups[groupKey]) {
           ingredientGroups[groupKey] = {
@@ -322,12 +364,19 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
           return false;
         });
 
-        // Only add if not a duplicate
         if (!isDuplicate) {
           ingredientGroups[groupKey].variants.push(variantData);
         }
+        } catch (rowError) {
+          console.warn(`Error processing row ${rowIndex + 2}:`, rowError);
+          rowErrors.push({ row: rowIndex + 2, error: rowError.message });
+        }
       });
-      
+
+      if (rowErrors.length > 0) {
+        console.warn(`${rowErrors.length} rows had parsing issues and were skipped`);
+      }
+
       // Helper to compare fields and find changes
       const getFieldChanges = (newData, existingData, fieldsToCompare) => {
         const changes = [];
@@ -474,7 +523,11 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
 
       let errorMessage = 'Failed to process ingredients. ';
 
-      if (error.message && error.message.includes('product_variants')) {
+      if (isAuthError(error)) {
+        errorMessage = 'Your session has expired. Please refresh the page and log in again.';
+      } else if (error.message && error.message.includes('session has expired')) {
+        errorMessage = error.message;
+      } else if (error.message && error.message.includes('product_variants')) {
         errorMessage += 'There was an issue accessing the product variants database. Please ensure the database is set up correctly.';
       } else if (error.message) {
         errorMessage += error.message;
@@ -727,9 +780,14 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         successCount++;
       } catch (error) {
         console.error(`Failed to save ingredient ${ingredientData.name}:`, error);
+        if (isAuthError(error)) {
+          setError('Your session has expired. Please refresh the page and log in again.');
+          setIsProcessing(false);
+          return;
+        }
         errorCount++;
       }
-      
+
       if (i < parsedIngredients.length - 1 && smallDelayMs > 0) {
         await delay(smallDelayMs);
       }
