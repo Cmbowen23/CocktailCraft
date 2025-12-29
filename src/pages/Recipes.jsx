@@ -179,7 +179,7 @@ export default function RecipesPage() {
       await new Promise(r => setTimeout(r, 50));
 
       // 2. Ingredients (load first for enrichment)
-      const ingredientsData = await base44.entities.Ingredient.list().catch(err => {
+      const ingredientsData = await base44.entities.Ingredient.list('-created_at', 5000).catch(err => {
         console.error("Error loading ingredients:", err);
         return [];
       });
@@ -236,7 +236,7 @@ export default function RecipesPage() {
 
   const refreshIngredients = async () => {
     try {
-      const ingredientsData = await base44.entities.Ingredient.list();
+      const ingredientsData = await base44.entities.Ingredient.list('-created_at', 5000);
       setAllIngredients(ingredientsData || []);
     } catch (err) {
       console.error("Error loading ingredients:", err);

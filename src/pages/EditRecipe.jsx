@@ -55,7 +55,7 @@ export default function EditRecipePage() {
 
             const [recipeData, ingredientsData, recipesData, allProductVariants] = await Promise.all([
                 Recipe.get(recipeId),
-                Ingredient.list(),
+                Ingredient.list('-created_at', 5000),
                 Recipe.list(),
                 base44.entities.ProductVariant.list('-created_at', 5000)
             ]);

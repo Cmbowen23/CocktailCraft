@@ -60,7 +60,7 @@ const IngredientMappingSearch = ({ currentName, allIngredients, onMap, onCreate 
       if (ingredientMatches && ing.prep_actions && Array.isArray(ing.prep_actions)) {
         ing.prep_actions.forEach(prep => {
           if (prep.name && prep.id) {
-            const prepDisplayName = `${ing.name}, ${pep.name}`;
+            const prepDisplayName = `${ing.name}, ${prep.name}`;
             const prepNameLower = prep.name.toLowerCase();
             const prepMatchesInput = prepNameLower.includes(typedInput);
             const prepScore = baseScore + (prepMatchesInput ? 50 : 0) + 5;
