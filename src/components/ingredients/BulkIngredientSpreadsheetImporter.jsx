@@ -26,6 +26,36 @@ const normalizeName = (name) => {
     .replace(/\s+/g, ' '); // collapse multiple spaces
 };
 
+// Parse combined variant_size like "750ml", "1l", "1.75l" into quantity and unit
+const parseVariantSize = (sizeStr) => {
+  if (!sizeStr) return { quantity: 0, unit: 'ml' };
+
+  const normalized = sizeStr.toString().toLowerCase().trim();
+
+  // Match patterns like "750ml", "1l", "1.75l", "750 ml", "1 l"
+  const match = normalized.match(/^([\d.]+)\s*(ml|l|oz|gal|fl oz)?$/i);
+
+  if (match) {
+    const quantity = parseFloat(match[1]) || 0;
+    let unit = (match[2] || 'ml').toLowerCase();
+
+    // Normalize unit names
+    if (unit === 'fl oz') unit = 'oz';
+
+    return { quantity, unit };
+  }
+
+  // If no unit found, try to infer from number size
+  const numMatch = normalized.match(/^([\d.]+)$/);
+  if (numMatch) {
+    const qty = parseFloat(numMatch[1]);
+    // If it's a small number (< 10), likely liters; otherwise ml
+    return { quantity: qty, unit: qty < 10 ? 'l' : 'ml' };
+  }
+
+  return { quantity: 0, unit: 'ml' };
+};
+
 export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel, allIngredients = [] }) {
   const [step, setStep] = useState('upload');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -124,6 +154,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         'name',
         'category',
         'spirit_type',
+        'style',
         'substyle',
         'flavor',
         'region',
@@ -132,21 +163,45 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         'exclusive',
         'tier',
         'purchase_price',
+        'variant_size',
         'purchase_quantity',
         'purchase_unit',
         'use_case_pricing',
         'case_price',
         'bottles_per_case',
         'abv',
-        'description'
+        'description',
+        'bottle_image_url'
       ];
+
+      const columnAliases = {
+        'sku_numb': 'sku_number',
+        'sku': 'sku_number',
+        'bottles_per': 'bottles_per_case',
+        'bottles': 'bottles_per_case',
+        'bottle_price': 'purchase_price',
+        'price': 'purchase_price',
+        'size': 'variant_size',
+        'bottle_size': 'variant_size',
+        'image_url': 'bottle_image_url',
+        'image': 'bottle_image_url',
+        'type': 'spirit_type',
+        'spirit': 'spirit_type'
+      };
 
       const initialMappings = {};
       expectedFields.forEach(field => {
         if (headers.includes(field)) {
           initialMappings[field] = field;
         } else {
-          initialMappings[field] = '';
+          const aliasMatch = Object.entries(columnAliases).find(
+            ([alias, target]) => target === field && headers.includes(alias)
+          );
+          if (aliasMatch) {
+            initialMappings[field] = aliasMatch[0];
+          } else {
+            initialMappings[field] = '';
+          }
         }
       });
       setColumnMappings(initialMappings);
@@ -204,6 +259,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
             name: name,
             category: mappedRow.category || 'other',
             spirit_type: mappedRow.spirit_type || null,
+            style: mappedRow.style || null,
             substyle: mappedRow.substyle || null,
             flavor: mappedRow.flavor || null,
             region: mappedRow.region || null,
@@ -213,13 +269,21 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
             ingredient_type: 'purchased',
             abv: parseFloat(mappedRow.abv) || 0,
             description: mappedRow.description || null,
+            bottle_image_url: mappedRow.bottle_image_url || null,
             variants: []
           };
         }
-        
-        // Add this row as a variant
-        const sizeQty = parseFloat(mappedRow.purchase_quantity) || 0;
-        const sizeUnit = (mappedRow.purchase_unit || 'ml').toLowerCase();
+
+        // Add this row as a variant - support both combined variant_size and separate fields
+        let sizeQty, sizeUnit;
+        if (mappedRow.variant_size) {
+          const parsed = parseVariantSize(mappedRow.variant_size);
+          sizeQty = parsed.quantity;
+          sizeUnit = parsed.unit;
+        } else {
+          sizeQty = parseFloat(mappedRow.purchase_quantity) || 0;
+          sizeUnit = (mappedRow.purchase_unit || 'ml').toLowerCase();
+        }
 
         // Convert to ml for size_ml field
         let size_ml = sizeQty;
@@ -685,12 +749,12 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   };
 
   const downloadTemplate = () => {
-    const templateData = `name,category,spirit_type,substyle,flavor,region,supplier,sku_number,exclusive,tier,purchase_price,purchase_quantity,purchase_unit,case_price,bottles_per_case,abv,description
-Hendrick's Gin,spirit,Gin,,,Scotland,Hendrick's,HEN-750,TRUE,premium,35.99,750,ml,215.94,6,44,"Distinctive gin with cucumber and rose"
-Hendrick's Gin,spirit,Gin,,,Scotland,Hendrick's,HEN-1L,TRUE,premium,45.99,1,L,275.94,6,44,"Distinctive gin with cucumber and rose"
-Absolut Citron Vodka,spirit,Vodka,Flavored,Lemon,Sweden,Absolut,ABS-CIT-750,FALSE,call,22.99,750,ml,,,40,"Citrus flavored vodka"
-Bacardi White Rum,spirit,Rum,,,Puerto Rico,Bacardi,BAC-750,FALSE,call,24.99,750,ml,,,40,"Classic white rum"
-Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to water ratio"`;
+    const templateData = `name,variant_size,category,spirit_type,style,substyle,flavor,region,supplier,sku_number,exclusive,tier,purchase_price,case_price,bottles_per_case,abv,description,bottle_image_url
+1800 Anejo Tequila,750ml,Spirit,Tequila,Tequila,Anejo,,Mexico,Proximo Spirits,248440,FALSE,Premium,37.6,211.14,6,40,"Smooth aged tequila",https://example.com/248440.jpg
+1800 Coconut Tequila,1l,Spirit,Tequila,Flavored,Coconut,Coconut,Mexico,Proximo Spirits,260250,FALSE,Top Shelf,32.25,188.94,6,35,"A unique coconut infused tequila",https://example.com/260250.jpg
+1800 Coconut Tequila,750ml,Spirit,Tequila,Flavored,Coconut,Coconut,Mexico,Proximo Spirits,260240,FALSE,Top Shelf,29.6,339.6,12,35,"A unique coconut infused tequila",https://example.com/260240.jpg
+1800 Coconut Tequila,1.75l,Spirit,Tequila,Flavored,Coconut,Coconut,Mexico,Proximo Spirits,260260,FALSE,Top Shelf,46.39,272.94,6,35,"A unique coconut infused tequila",https://example.com/260260.jpg
+Simple Syrup,500ml,syrup,,,,,,,SYR-500,FALSE,,5.00,,,0,"1:1 sugar to water ratio",`;
     
     const blob = new Blob([templateData], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
@@ -708,6 +772,7 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
       { key: 'name', label: 'Name', required: true },
       { key: 'category', label: 'Category', required: true },
       { key: 'spirit_type', label: 'Spirit Type', required: false },
+      { key: 'style', label: 'Style', required: false },
       { key: 'substyle', label: 'Substyle', required: false },
       { key: 'flavor', label: 'Flavor', required: false },
       { key: 'region', label: 'Region', required: false },
@@ -715,13 +780,15 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
       { key: 'sku_number', label: 'SKU Number', required: false },
       { key: 'exclusive', label: 'Exclusive', required: false },
       { key: 'tier', label: 'Tier', required: false },
-      { key: 'purchase_price', label: 'Purchase Price', required: false },
+      { key: 'purchase_price', label: 'Bottle Price', required: false },
+      { key: 'variant_size', label: 'Variant Size (e.g. 750ml)', required: false },
       { key: 'purchase_quantity', label: 'Purchase Quantity', required: false },
       { key: 'purchase_unit', label: 'Purchase Unit', required: false },
       { key: 'case_price', label: 'Case Price', required: false },
       { key: 'bottles_per_case', label: 'Bottles Per Case', required: false },
       { key: 'abv', label: 'ABV', required: false },
       { key: 'description', label: 'Description', required: false },
+      { key: 'bottle_image_url', label: 'Bottle Image URL', required: false },
     ];
 
     const requiredMapped = ingredientFields
@@ -885,7 +952,9 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Size:</span>
-                        <span className="font-medium text-gray-900">{row.purchase_quantity} {row.purchase_unit}</span>
+                        <span className="font-medium text-gray-900">
+                          {row.variant_size || `${row.purchase_quantity || ''} ${row.purchase_unit || ''}`.trim() || '-'}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1266,14 +1335,12 @@ Simple Syrup,syrup,,,,,House Made,SYR-500,FALSE,,5.00,500,ml,,,0,"1:1 sugar to w
             <div className="text-sm text-emerald-700 space-y-1">
               <p><strong>Required columns:</strong> name, category</p>
               <p>
-                <strong>Optional columns:</strong> spirit_type, substyle, flavor, region, supplier,
-                sku_number, exclusive (TRUE/FALSE), tier, purchase_price, purchase_quantity,
-                purchase_unit, case_price, bottles_per_case, abv, description
+                <strong>Optional columns:</strong> variant_size (e.g. 750ml, 1l, 1.75l), spirit_type, style, substyle, flavor, region, supplier,
+                sku_number, exclusive (TRUE/FALSE), tier, purchase_price (bottle price), case_price, bottles_per_case, abv, description, bottle_image_url
               </p>
               <p className="mt-2 text-xs text-emerald-600">
-                ⚠️ Multiple rows with the same name AND supplier will create ONE ingredient with
-                multiple size variants. Make sure 'category' and 'tier' are spelled correctly in
-                your CSV.
+                Multiple rows with the same name AND supplier will create ONE ingredient with
+                multiple size variants. Each row represents a different bottle size (750ml, 1L, 1.75L, etc.).
               </p>
             </div>
           </div>
