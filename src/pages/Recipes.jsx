@@ -59,7 +59,7 @@ export default function RecipesPage() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [displayMode, setDisplayMode] = useState("grid");
-  const [recipeType, setRecipeType] = useState("cocktail");
+  const [recipeType, setRecipeType] = useState("all");
   const [showBookView, setShowBookView] = useState(false);
   const [filters, setFilters] = useState({
     category: "all",
