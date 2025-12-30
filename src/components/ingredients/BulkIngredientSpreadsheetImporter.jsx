@@ -1,14 +1,15 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
-// --- ROBUST PARSER (Fixes column shifting) ---
+// --- ROBUST PARSER ---
 const parseCSVLine = (text) => {
   const result = [];
   let curValue = '';
@@ -61,11 +62,31 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const [rawHeaders, setRawHeaders] = useState([]);
   const [rawRows, setRawRows] = useState([]);
   const [mapping, setMapping] = useState({});
+  const [existingSkus, setExistingSkus] = useState(new Map()); // Cache for Diffing
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 1. Handle File
+  // 1. Fetch Existing Data for "Diff" View
+  useEffect(() => {
+    const fetchExisting = async () => {
+      // Get all variants to check for price changes
+      const { data, error } = await supabase
+        .from('product_variants')
+        .select('sku_number, purchase_price, size_ml');
+      
+      if (!error && data) {
+        const map = new Map();
+        data.forEach(v => {
+           if(v.sku_number) map.set(v.sku_number.toString(), v);
+        });
+        setExistingSkus(map);
+      }
+    };
+    fetchExisting();
+  }, []);
+
+  // 2. Handle File
   const handleFileSelect = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -105,32 +126,78 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     }
   };
 
-  // 2. Computed "Clean" Data for Audit
-  const processedData = useMemo(() => {
-    return rawRows.map(row => {
+  // 3. Transform Data into Hierarchy (Ingredient -> Variants)
+  const groupedData = useMemo(() => {
+    const groups = {};
+
+    rawRows.forEach(row => {
       const newRow = {};
       Object.entries(mapping).forEach(([dbKey, csvHeader]) => {
         if (csvHeader) newRow[dbKey] = row[csvHeader];
       });
-      return newRow;
-    }).filter(r => r.name); // Filter out rows without a name
-  }, [rawRows, mapping]);
 
-  // 3. Batch Upload (Fixes Looping)
+      if (!newRow.name) return;
+
+      const nameKey = newRow.name.toLowerCase().trim();
+      
+      if (!groups[nameKey]) {
+        groups[nameKey] = {
+          name: newRow.name,
+          category: newRow.category,
+          supplier: newRow.supplier,
+          variants: []
+        };
+      }
+
+      // Check Diff Logic
+      const sku = newRow.sku_number;
+      let changeType = 'NEW'; // NEW, UPDATE, SAME
+      let priceChange = null;
+
+      if (sku && existingSkus.has(sku)) {
+        const existing = existingSkus.get(sku);
+        const newPrice = parseFloat(newRow.purchase_price);
+        
+        if (existing.purchase_price !== newPrice && !isNaN(newPrice)) {
+          changeType = 'UPDATE';
+          priceChange = { old: existing.purchase_price, new: newPrice };
+        } else {
+          changeType = 'SAME';
+        }
+      }
+
+      groups[nameKey].variants.push({
+        ...newRow,
+        changeType,
+        priceChange
+      });
+    });
+
+    return Object.values(groups);
+  }, [rawRows, mapping, existingSkus]);
+
+  // 4. Batch Upload
   const handleImport = async () => {
     setStep('processing');
     setProgress(0);
     setStatus('Initializing import...');
 
     try {
-      const rows = processedData;
+      // Flatten back to rows for API
+      const flatRows = [];
+      groupedData.forEach(group => {
+         group.variants.forEach(v => {
+            flatRows.push({ ...v, name: group.name, category: group.category, supplier: group.supplier });
+         });
+      });
+
       const BATCH_SIZE = 100;
-      const total = rows.length;
+      const total = flatRows.length;
       let processed = 0;
 
       for (let i = 0; i < total; i += BATCH_SIZE) {
-        const batch = rows.slice(i, i + BATCH_SIZE);
-        setStatus(`Importing rows ${i + 1} to ${Math.min(i + BATCH_SIZE, total)}...`);
+        const batch = flatRows.slice(i, i + BATCH_SIZE);
+        setStatus(`Importing batch ${Math.floor(i/BATCH_SIZE) + 1}...`);
         
         const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
           body: { rows: batch }
@@ -143,14 +210,13 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         setProgress(Math.round((processed / total) * 100));
       }
 
-      setStatus('Finalizing...');
+      setStatus('Done!');
       setStep('complete');
       setTimeout(onComplete, 2000);
 
     } catch (err) {
       console.error(err);
       setStatus('Failed: ' + err.message);
-      // Wait a moment so user can see the error
       setTimeout(() => setStep('audit'), 2000); 
     }
   };
@@ -159,7 +225,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     <Card className="max-w-md mx-auto mt-10 bg-emerald-50 border-emerald-100 p-8 text-center shadow-sm">
         <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto mb-4" />
         <h3 className="text-xl font-bold text-emerald-900">Import Complete</h3>
-        <p className="text-emerald-700 mt-2">All {processedData.length} items have been processed.</p>
+        <p className="text-emerald-700 mt-2">Inventory updated successfully.</p>
     </Card>
   );
 
@@ -253,7 +319,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
           </div>
         )}
 
-        {/* STEP 3: AUDIT & CHANGES */}
+        {/* STEP 3: HIERARCHICAL AUDIT (Item -> Nested Variations) */}
         {step === 'audit' && (
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
@@ -262,43 +328,72 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                         <CheckCircle2 className="w-4 h-4"/> Ready to Import
                     </h4>
                     <p className="text-sm text-blue-700 mt-1">
-                        Found <strong>{processedData.length}</strong> valid rows. <br/>
-                        <span className="text-xs opacity-75">Rows without a Name have been automatically removed.</span>
+                        Found <strong>{groupedData.length}</strong> unique ingredients. Review changes below before saving.
                     </p>
                 </div>
                 <Button onClick={handleImport} className="bg-emerald-600 hover:bg-emerald-700 px-8 h-16 text-lg shadow-lg">
-                   <Save className="w-5 h-5 mr-2"/> Import {processedData.length} Items
+                   <Save className="w-5 h-5 mr-2"/> Import Data
                 </Button>
             </div>
 
-            <div className="border rounded-md overflow-hidden mb-6 h-[400px] overflow-auto relative">
+            <div className="border rounded-md overflow-hidden mb-6 h-[500px] overflow-auto relative bg-white">
                 <Table>
-                    <TableHeader className="bg-gray-100 sticky top-0 z-10">
+                    <TableHeader className="bg-gray-100 sticky top-0 z-10 shadow-sm">
                         <TableRow>
-                            <TableHead className="w-[30%]">Name</TableHead>
-                            <TableHead>SKU</TableHead>
-                            <TableHead>Supplier</TableHead>
-                            <TableHead>Cost</TableHead>
-                            <TableHead>Size</TableHead>
+                            <TableHead className="w-[40%] pl-4">Ingredient / Size</TableHead>
+                            <TableHead className="w-[20%]">SKU</TableHead>
+                            <TableHead className="w-[15%]">Status</TableHead>
+                            <TableHead className="w-[25%] text-right pr-6">Changes / Price</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {processedData.length === 0 ? (
-                             <TableRow><TableCell colSpan={5} className="text-center py-10 text-gray-400">No valid data found</TableCell></TableRow>
-                        ) : (
-                            processedData.map((row, i) => (
-                                <TableRow key={i} className="hover:bg-gray-50">
-                                    <TableCell className="font-medium">
-                                        {row.name}
-                                        {row.description && <div className="text-[10px] text-gray-400 truncate w-48">{row.description}</div>}
+                        {groupedData.map((group, i) => (
+                            <React.Fragment key={i}>
+                                {/* PARENT ROW: INGREDIENT */}
+                                <TableRow className="bg-gray-50 border-t border-gray-200">
+                                    <TableCell className="font-bold text-gray-800 py-3 pl-4 flex items-center gap-2">
+                                        <ChevronDown className="w-4 h-4 text-gray-400"/>
+                                        {group.name}
+                                        <span className="text-xs font-normal text-gray-500 bg-white px-2 py-0.5 rounded border ml-2">
+                                            {group.category}
+                                        </span>
                                     </TableCell>
-                                    <TableCell className="text-xs font-mono text-gray-500">{row.sku_number || '-'}</TableCell>
-                                    <TableCell className="text-sm">{row.supplier || '-'}</TableCell>
-                                    <TableCell className="text-sm">{row.purchase_price ? `$${row.purchase_price}` : '-'}</TableCell>
-                                    <TableCell className="text-sm text-gray-500">{row.variant_size || '750ml'}</TableCell>
+                                    <TableCell colSpan={3} className="text-xs text-gray-400 text-right pr-6 italic">
+                                        {group.variants.length} variant{group.variants.length !== 1 ? 's' : ''}
+                                    </TableCell>
                                 </TableRow>
-                            ))
-                        )}
+
+                                {/* CHILD ROWS: VARIANTS */}
+                                {group.variants.map((v, idx) => (
+                                    <TableRow key={`${i}-${idx}`} className="hover:bg-blue-50/50">
+                                        <TableCell className="pl-12 text-sm text-gray-600 border-l-4 border-transparent hover:border-blue-400">
+                                            {v.variant_size || '750ml'} 
+                                            <span className="text-gray-400 mx-2">•</span> 
+                                            {v.supplier || 'No Supplier'}
+                                        </TableCell>
+                                        <TableCell className="font-mono text-xs text-gray-500">
+                                            {v.sku_number || '-'}
+                                        </TableCell>
+                                        <TableCell>
+                                            {v.changeType === 'NEW' && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">New</Badge>}
+                                            {v.changeType === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100">Update</Badge>}
+                                            {v.changeType === 'SAME' && <span className="text-xs text-gray-400">Unchanged</span>}
+                                        </TableCell>
+                                        <TableCell className="text-right pr-6 font-mono text-sm">
+                                            {v.priceChange ? (
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <span className="text-gray-400 line-through">${v.priceChange.old}</span>
+                                                    <ArrowRight className="w-3 h-3 text-gray-400"/>
+                                                    <span className="text-orange-600 font-bold">${v.priceChange.new}</span>
+                                                </div>
+                                            ) : (
+                                                <span>${v.purchase_price || '0.00'}</span>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </React.Fragment>
+                        ))}
                     </TableBody>
                 </Table>
             </div>
