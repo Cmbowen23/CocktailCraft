@@ -332,15 +332,14 @@ export default function DuplicateRecipeManager() {
               Empty Recipes ({emptyRecipes.length})
             </TabsTrigger>
           </TabsList>
-        </Tabs>
 
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-          </div>
-        ) : (
-          <>
-            <TabsContent value="duplicates">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+          ) : (
+            <>
+              <TabsContent value="duplicates">
               {duplicates.length === 0 ? (
                 <Card>
                   <CardContent className="py-12 text-center">
@@ -572,8 +571,9 @@ export default function DuplicateRecipeManager() {
                 </div>
               )}
             </TabsContent>
-          </>
-        )}
+            </>
+          )}
+        </Tabs>
       </div>
     </div>
   );
