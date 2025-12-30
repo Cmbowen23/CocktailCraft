@@ -325,13 +325,15 @@ export default function IngredientForm({
 
     (allIngredients || []).forEach(ing => {
       if (ing.purchase_unit) units.add(ing.purchase_unit);
-      (ing.custom_conversions || []).forEach(conv => {
+      const customConversions = Array.isArray(ing.custom_conversions) ? ing.custom_conversions : [];
+      customConversions.forEach(conv => {
         if (conv.from_unit) units.add(conv.from_unit);
         if (conv.to_unit) units.add(conv.to_unit);
       });
     });
 
-    (currentIngredient.custom_conversions || []).forEach(conv => {
+    const currentCustomConversions = Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : [];
+    currentCustomConversions.forEach(conv => {
       if (conv.from_unit) units.add(conv.from_unit);
       if (conv.to_unit) units.add(conv.to_unit);
     });
@@ -360,11 +362,13 @@ export default function IngredientForm({
 
     // from all ingredients
     (allIngredients || []).forEach((ing) => {
-      (ing.custom_conversions || []).forEach(addConv);
+      const customConversions = Array.isArray(ing.custom_conversions) ? ing.custom_conversions : [];
+      customConversions.forEach(addConv);
     });
 
     // + from this ingredient
-    (currentIngredient.custom_conversions || []).forEach(addConv);
+    const currentCustomConversions = Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : [];
+    currentCustomConversions.forEach(addConv);
 
     return Array.from(map.values());
   }, [allIngredients, currentIngredient.custom_conversions]);
@@ -1880,7 +1884,7 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
                     const costPer = parseFloat(currentIngredient.cost_per_unit) || 0;
                     const baseUnit = currentIngredient.unit || 'unit';
                     const purchaseUnit = currentIngredient.purchase_unit;
-                    const conversions = currentIngredient.custom_conversions || [];
+                    const conversions = Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : [];
 
                     let conversionLabel = '';
 
@@ -2155,14 +2159,14 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
                       {!readOnly && (
                         <CustomConversionsManager
                           customConversions={
-                            currentIngredient.custom_conversions || []
+                            Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : []
                           }
                           onConversionsChange={handleConversionsChange}
                           availableUnits={availableUnitsForConversions}
                           readOnly={readOnly}
                         />
                       )}
-                      {readOnly && currentIngredient.custom_conversions && currentIngredient.custom_conversions.length > 0 && (
+                      {readOnly && Array.isArray(currentIngredient.custom_conversions) && currentIngredient.custom_conversions.length > 0 && (
                         <div className="space-y-2">
                           <h4 className="text-md font-semibold text-gray-800">Custom Conversions</h4>
                           <ul className="list-disc pl-5 text-sm text-gray-600">
