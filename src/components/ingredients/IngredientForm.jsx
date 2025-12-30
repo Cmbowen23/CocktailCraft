@@ -687,7 +687,8 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
   };
 
   const handlePrepActionChange = (index, field, value) => {
-    const newPrepActions = [...currentIngredient.prep_actions];
+    const currentPrepActions = Array.isArray(currentIngredient.prep_actions) ? currentIngredient.prep_actions : [];
+    const newPrepActions = [...currentPrepActions];
     newPrepActions[index][field] = value;
     setCurrentIngredient(prev => ({ ...prev, prep_actions: newPrepActions }));
   };
@@ -723,7 +724,7 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
   const removePrepAction = (index) => {
     setCurrentIngredient(prev => ({
       ...prev,
-      prep_actions: prev.prep_actions.filter((_, i) => i !== index),
+      prep_actions: (Array.isArray(prev.prep_actions) ? prev.prep_actions : []).filter((_, i) => i !== index),
     }));
   };
 
@@ -1955,7 +1956,7 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
                           a citrus, chopping herbs).
                         </p>
                         <div className="space-y-3 mt-3">
-                          {currentIngredient.prep_actions.map(
+                          {(Array.isArray(currentIngredient.prep_actions) ? currentIngredient.prep_actions : []).map(
                             (action, index) => (
                               <div
                                 key={index}
