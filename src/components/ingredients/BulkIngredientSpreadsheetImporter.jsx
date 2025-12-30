@@ -6,10 +6,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ImageIcon } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ImageIcon, ExternalLink } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
-// --- ROBUST PARSER ---
+// --- PARSER ---
 const parseCSVLine = (text) => {
   const result = [];
   let curValue = '';
@@ -72,18 +73,27 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 1. Fetch Existing Data for Deep Comparison
+  // 1. Fetch FULL DATA for Comprehensive Diff
   useEffect(() => {
     const fetchExisting = async () => {
-      // Fetch all fields we want to check for updates
+      // We select EVERYTHING so we can catch any change
       const { data, error } = await supabase
         .from('product_variants')
-        .select('sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive');
+        .select(`
+            sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive, 
+            bottles_per_case, purchase_quantity, purchase_unit,
+            ingredient:ingredient_id ( name, supplier, category, spirit_type, style, substyle, flavor, region, description, abv )
+        `);
       
       if (!error && data) {
         const map = new Map();
         data.forEach(v => {
-           if(v.sku_number) map.set(v.sku_number.toString(), v);
+           if(v.sku_number) {
+               // Flatten structure for easier comparison
+               const flat = { ...v, ...v.ingredient }; 
+               delete flat.ingredient;
+               map.set(v.sku_number.toString(), flat);
+           }
         });
         setExistingSkus(map);
       }
@@ -99,7 +109,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     try {
       const text = await file.text();
       const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-      
       const headers = parseCSVLine(lines[0]);
       setRawHeaders(headers);
 
@@ -112,6 +121,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
       }
       setRawRows(rows);
 
+      // Auto-Map
       const newMap = {};
       FIELD_CONFIG.forEach(field => {
         let match = headers.find(h => h === field.key);
@@ -121,7 +131,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         }
         if (match) newMap[field.key] = match;
       });
-      
       setMapping(newMap);
       setStep('map');
       setErrorMsg('');
@@ -130,7 +139,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     }
   };
 
-  // 3. Transform Data & Detect Changes
+  // 3. Transform & Diff
   const groupedData = useMemo(() => {
     const groups = {};
 
@@ -141,7 +150,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
       });
 
       if (!newRow.name) return;
-
       const nameKey = newRow.name.toLowerCase().trim();
       
       if (!groups[nameKey]) {
@@ -153,7 +161,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         };
       }
 
-      // --- DIFF LOGIC ---
+      // --- FULL DIFF LOGIC ---
       const sku = newRow.sku_number;
       let changeType = 'NEW'; 
       const changes = [];
@@ -162,26 +170,25 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         const existing = existingSkus.get(sku);
         changeType = 'SAME';
 
-        // Helper to compare fields
-        const checkChange = (field, label, isCurrency = false) => {
-            const newVal = newRow[field];
-            const oldVal = existing[field];
+        const checkChange = (field, label, type = 'string') => {
+            let newVal = newRow[field];
+            let oldVal = existing[field];
             
-            // Skip if new value is empty/undefined
-            if (newVal === undefined || newVal === '') return;
+            if (newVal === undefined || newVal === '') return; // Don't wipe existing data with empty csv cells
 
             let isDifferent = false;
-            
-            if (isCurrency) {
+
+            if (type === 'currency' || type === 'number') {
                 const n = parseFloat(newVal);
                 const o = parseFloat(oldVal);
-                if (!isNaN(n) && Math.abs(n - (o || 0)) > 0.01) isDifferent = true;
-            } else if (field === 'exclusive') {
+                if (isNaN(n)) return; 
+                if (Math.abs(n - (o || 0)) > 0.01) isDifferent = true;
+            } else if (type === 'boolean') {
                 const n = String(newVal).toLowerCase() === 'true';
                 const o = Boolean(oldVal);
                 if (n !== o) isDifferent = true;
             } else {
-                // String comparison
+                // String normalize
                 if (String(newVal).trim() !== String(oldVal || '').trim()) isDifferent = true;
             }
 
@@ -191,24 +198,30 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                     field: label,
                     old: oldVal,
                     new: newVal,
-                    isCurrency,
-                    isImage: field === 'bottle_image_url'
+                    type
                 });
             }
         };
 
-        checkChange('purchase_price', 'Price', true);
-        checkChange('case_price', 'Case Price', true);
-        checkChange('bottle_image_url', 'Image');
+        // Scan EVERY field for updates
+        checkChange('purchase_price', 'Price', 'currency');
+        checkChange('case_price', 'Case Price', 'currency');
+        checkChange('supplier', 'Supplier');
+        checkChange('category', 'Category');
+        checkChange('spirit_type', 'Spirit Type');
+        checkChange('style', 'Style');
+        checkChange('substyle', 'Sub-Style');
+        checkChange('flavor', 'Flavor');
+        checkChange('region', 'Region');
+        checkChange('abv', 'ABV', 'number');
         checkChange('tier', 'Tier');
-        checkChange('exclusive', 'Exclusive');
-      }
+        checkChange('exclusive', 'Exclusive', 'boolean');
+        checkChange('bottle_image_url', 'Image');
+        checkChange('bottles_per_case', 'Bt/Case', 'number');
+        checkChange('purchase_quantity', 'Pur. Qty', 'number');
+    }
 
-      groups[nameKey].variants.push({
-        ...newRow,
-        changeType,
-        changes
-      });
+      groups[nameKey].variants.push({ ...newRow, changeType, changes });
     });
 
     return Object.values(groups);
@@ -262,12 +275,12 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     <Card className="max-w-md mx-auto mt-10 bg-emerald-50 border-emerald-100 p-8 text-center shadow-sm">
         <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto mb-4" />
         <h3 className="text-xl font-bold text-emerald-900">Import Complete</h3>
-        <p className="text-emerald-700 mt-2">Your inventory has been updated.</p>
+        <p className="text-emerald-700 mt-2">Inventory updated successfully.</p>
     </Card>
   );
 
   return (
-    <Card className="max-w-6xl mx-auto mt-6 shadow-md border-gray-200">
+    <Card className="max-w-7xl mx-auto mt-6 shadow-md border-gray-200">
       <CardHeader className="border-b bg-gray-50/50 pb-4">
         <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
@@ -330,13 +343,8 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                     </TableCell>
                                     <TableCell className="text-center text-gray-400"><ArrowRight className="w-4 h-4 mx-auto"/></TableCell>
                                     <TableCell>
-                                        <Select 
-                                            value={mapping[field.key] || 'skip'} 
-                                            onValueChange={(val) => setMapping(prev => ({...prev, [field.key]: val === 'skip' ? null : val}))}
-                                        >
-                                            <SelectTrigger className={`h-8 text-sm ${isMapped ? "border-gray-200" : "border-red-200 bg-white"}`}>
-                                                <SelectValue placeholder="-- Unmapped --" />
-                                            </SelectTrigger>
+                                        <Select value={mapping[field.key] || 'skip'} onValueChange={(val) => setMapping(prev => ({...prev, [field.key]: val === 'skip' ? null : val}))}>
+                                            <SelectTrigger className={`h-8 text-sm ${isMapped ? "border-gray-200" : "border-red-200 bg-white"}`}><SelectValue placeholder="-- Unmapped --" /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="skip" className="text-gray-400 italic">-- Ignore --</SelectItem>
                                                 {rawHeaders.map((h, i) => <SelectItem key={`${h}-${i}`} value={h}>{h}</SelectItem>)}
@@ -361,12 +369,8 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
                 <div className="bg-blue-50 border border-blue-100 p-4 rounded-md flex-1 mr-4">
-                    <h4 className="font-medium text-blue-900 flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4"/> Ready to Import
-                    </h4>
-                    <p className="text-sm text-blue-700 mt-1">
-                        Found <strong>{groupedData.length}</strong> unique ingredients.
-                    </p>
+                    <h4 className="font-medium text-blue-900 flex items-center gap-2"><CheckCircle2 className="w-4 h-4"/> Review & Import</h4>
+                    <p className="text-sm text-blue-700 mt-1">Found <strong>{groupedData.length}</strong> items.</p>
                 </div>
                 <Button onClick={handleImport} className="bg-emerald-600 hover:bg-emerald-700 px-8 h-16 text-lg shadow-lg">
                    <Save className="w-5 h-5 mr-2"/> Import Data
@@ -378,63 +382,61 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                     <Table>
                         <TableHeader className="bg-gray-100 sticky top-0 z-10 shadow-sm">
                             <TableRow>
-                                <TableHead className="w-[35%] pl-4">Ingredient / Size</TableHead>
+                                <TableHead className="w-[30%] pl-4">Ingredient / Size</TableHead>
                                 <TableHead className="w-[15%]">SKU</TableHead>
                                 <TableHead className="w-[10%]">Status</TableHead>
-                                <TableHead className="w-[40%]">Updates Detected</TableHead>
+                                <TableHead className="w-[45%]">Updates Detected</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
+                            <TooltipProvider>
                             {groupedData.map((group, i) => (
                                 <React.Fragment key={i}>
-                                    {/* PARENT ROW */}
                                     <TableRow className="bg-gray-50 border-t border-gray-200">
                                         <TableCell className="font-bold text-gray-800 py-3 pl-4 flex items-center gap-2">
-                                            <ChevronDown className="w-4 h-4 text-gray-400"/>
-                                            {group.name}
-                                            <Badge variant="outline" className="bg-white text-gray-500 font-normal ml-2">
-                                                {group.category}
-                                            </Badge>
+                                            <ChevronDown className="w-4 h-4 text-gray-400"/> {group.name}
+                                            <Badge variant="outline" className="bg-white text-gray-500 font-normal ml-2">{group.category}</Badge>
                                         </TableCell>
-                                        <TableCell colSpan={3} className="text-xs text-gray-400 text-right pr-6 italic">
-                                            {group.variants.length} variant{group.variants.length !== 1 ? 's' : ''}
-                                        </TableCell>
+                                        <TableCell colSpan={3} className="text-xs text-gray-400 text-right pr-6 italic">{group.variants.length} variant(s)</TableCell>
                                     </TableRow>
 
-                                    {/* CHILD ROWS */}
                                     {group.variants.map((v, idx) => (
                                         <TableRow key={`${i}-${idx}`} className="hover:bg-blue-50/50">
                                             <TableCell className="pl-12 text-sm text-gray-600 border-l-4 border-transparent hover:border-blue-400">
-                                                {v.variant_size || '750ml'} 
-                                                <span className="text-gray-400 mx-2">•</span> 
-                                                {v.supplier || 'No Supplier'}
+                                                {v.variant_size || '750ml'} <span className="text-gray-400 mx-2">•</span> {v.supplier || 'No Supplier'}
                                             </TableCell>
-                                            <TableCell className="font-mono text-xs text-gray-500">
-                                                {v.sku_number || '-'}
-                                            </TableCell>
+                                            <TableCell className="font-mono text-xs text-gray-500">{v.sku_number || '-'}</TableCell>
                                             <TableCell>
-                                                {v.changeType === 'NEW' && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">New</Badge>}
-                                                {v.changeType === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100">Update</Badge>}
+                                                {v.changeType === 'NEW' && <Badge className="bg-green-100 text-green-700 border-green-200">New</Badge>}
+                                                {v.changeType === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200">Update</Badge>}
                                                 {v.changeType === 'SAME' && <span className="text-xs text-gray-400">Unchanged</span>}
                                             </TableCell>
-                                            <TableCell className="text-sm">
+                                            <TableCell className="text-sm py-2">
                                                 {v.changes.length > 0 ? (
-                                                    <div className="space-y-1">
+                                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                                                         {v.changes.map((c, cIdx) => (
-                                                            <div key={cIdx} className="flex items-center gap-2 text-xs">
-                                                                <span className="font-medium text-gray-700 w-16">{c.field}:</span>
-                                                                {c.isImage ? (
-                                                                    <span className="text-blue-600 flex items-center gap-1">
-                                                                        <ImageIcon className="w-3 h-3"/> Image Updated
-                                                                    </span>
+                                                            <div key={cIdx} className="flex items-center gap-2 text-xs bg-white/50 p-1 rounded">
+                                                                <span className="font-semibold text-gray-500">{c.field}:</span>
+                                                                
+                                                                {c.field === 'Image' ? (
+                                                                     <Tooltip>
+                                                                        <TooltipTrigger className="flex items-center gap-1 text-blue-600 underline">
+                                                                            <ImageIcon className="w-3 h-3"/> View Change
+                                                                        </TooltipTrigger>
+                                                                        <TooltipContent className="flex gap-2 p-2">
+                                                                            <div className="text-center"><p className="mb-1 text-xs">Old</p><img src={c.old} className="w-16 h-16 object-cover border"/></div>
+                                                                            <ArrowRight className="w-4 h-4 mt-8 text-gray-400"/>
+                                                                            <div className="text-center"><p className="mb-1 text-xs">New</p><img src={c.new} className="w-16 h-16 object-cover border"/></div>
+                                                                        </TooltipContent>
+                                                                     </Tooltip>
                                                                 ) : (
                                                                     <div className="flex items-center gap-1">
-                                                                        <span className="text-gray-400 line-through">
-                                                                            {c.isCurrency ? formatCurrency(c.old) : (c.old || 'Empty')}
+                                                                        <span className="text-gray-400 line-through decoration-red-400">
+                                                                            {c.type === 'currency' ? formatCurrency(c.old) : (c.old || 'Empty')}
                                                                         </span>
                                                                         <ArrowRight className="w-3 h-3 text-gray-400"/>
-                                                                        <span className="text-orange-600 font-bold">
-                                                                            {c.isCurrency ? formatCurrency(c.new) : c.new}
+                                                                        <span className="text-green-600 font-bold bg-green-50 px-1 rounded">
+                                                                            {c.type === 'currency' ? formatCurrency(c.new) : c.new}
                                                                         </span>
                                                                     </div>
                                                                 )}
@@ -449,6 +451,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                     ))}
                                 </React.Fragment>
                             ))}
+                            </TooltipProvider>
                         </TableBody>
                     </Table>
                 </div>
@@ -460,7 +463,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
           </div>
         )}
 
-        {/* LOADING */}
         {step === 'processing' && (
            <div className="text-center py-24 px-10">
               <Loader2 className="w-16 h-16 text-blue-600 animate-spin mx-auto mb-6"/>
