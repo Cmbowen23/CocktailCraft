@@ -27,6 +27,8 @@ import { createPageUrl } from '@/utils';
 
 export default function DuplicateRecipeManager() {
   const [duplicates, setDuplicates] = useState([]);
+  const [emptyRecipes, setEmptyRecipes] = useState([]);
+  const [activeTab, setActiveTab] = useState('duplicates');
   const [isLoading, setIsLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -36,6 +38,7 @@ export default function DuplicateRecipeManager() {
   useEffect(() => {
     loadUser();
     loadDuplicates();
+    loadEmptyRecipes();
   }, []);
 
   const loadUser = async () => {
@@ -95,6 +98,36 @@ export default function DuplicateRecipeManager() {
       toast.error('Failed to load duplicate recipes');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadEmptyRecipes = async () => {
+    try {
+      const query = `
+        SELECT
+          id,
+          name,
+          created_at,
+          description,
+          image_url,
+          category,
+          CASE
+            WHEN ingredients IS NULL THEN 'null'
+            WHEN jsonb_typeof(ingredients) = 'array' THEN jsonb_array_length(ingredients)::text
+            ELSE 'invalid'
+          END as ingredient_count
+        FROM recipes
+        WHERE
+          ingredients IS NULL
+          OR (jsonb_typeof(ingredients) = 'array' AND jsonb_array_length(ingredients) = 0)
+        ORDER BY created_at DESC;
+      `;
+
+      const result = await base44.raw(query);
+      setEmptyRecipes(result || []);
+    } catch (err) {
+      console.error('Failed to load empty recipes:', err);
+      toast.error('Failed to load empty recipes');
     }
   };
 
@@ -183,6 +216,54 @@ export default function DuplicateRecipeManager() {
     }
   };
 
+  const deleteEmptyRecipe = async (recipeId, recipeName) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      toast.error('Admin access required');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete empty recipe "${recipeName}"?\n\nThis recipe has no ingredients and will be permanently removed.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      await base44.entities.Recipe.delete(recipeId);
+      toast.success('Empty recipe deleted');
+      loadEmptyRecipes();
+    } catch (err) {
+      console.error('Failed to delete recipe:', err);
+      toast.error('Failed to delete recipe: ' + err.message);
+    }
+  };
+
+  const bulkDeleteEmptyRecipes = async () => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      toast.error('Admin access required');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ALL ${emptyRecipes.length} empty recipes?\n\nThis will permanently remove all recipes with no ingredients. This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      let deleted = 0;
+      for (const recipe of emptyRecipes) {
+        await base44.entities.Recipe.delete(recipe.id);
+        deleted++;
+      }
+      toast.success(`Deleted ${deleted} empty recipes`);
+      loadEmptyRecipes();
+    } catch (err) {
+      console.error('Failed to bulk delete:', err);
+      toast.error('Failed to delete empty recipes: ' + err.message);
+    }
+  };
+
   const getDataCompleteness = (version) => {
     let score = 0;
     if (version.has_ingredients) score += 40;
@@ -233,30 +314,46 @@ export default function DuplicateRecipeManager() {
                 Back to Admin
               </Button>
             </Link>
-            <h1 className="text-3xl font-bold text-gray-900">Duplicate Recipe Manager</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Recipe Cleanup Manager</h1>
             <p className="text-gray-600 mt-1">
-              Review and safely manage duplicate recipes
+              Manage duplicate and empty recipes
             </p>
           </div>
-          <Button onClick={loadDuplicates} variant="outline" disabled={isLoading}>
+          <Button onClick={() => { loadDuplicates(); loadEmptyRecipes(); }} variant="outline" disabled={isLoading}>
             {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
             Refresh
           </Button>
         </div>
 
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
+          <TabsList>
+            <TabsTrigger value="duplicates">
+              <Copy className="w-4 h-4 mr-2" />
+              Duplicates ({duplicates.length})
+            </TabsTrigger>
+            <TabsTrigger value="empty">
+              <XCircle className="w-4 h-4 mr-2" />
+              Empty Recipes ({emptyRecipes.length})
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
           </div>
-        ) : duplicates.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <CheckCircle2 className="w-12 h-12 text-green-600 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No Duplicates Found</h3>
-              <p className="text-gray-600">All recipes have unique names.</p>
-            </CardContent>
-          </Card>
         ) : (
+          <>
+            <TabsContent value="duplicates">
+              {duplicates.length === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center">
+                    <CheckCircle2 className="w-12 h-12 text-green-600 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">No Duplicates Found</h3>
+                    <p className="text-gray-600">All recipes have unique names.</p>
+                  </CardContent>
+                </Card>
+              ) : (
           <div className="space-y-4">
             <Alert className="bg-yellow-50 border-yellow-200">
               <AlertTriangle className="w-4 h-4 text-yellow-600" />
@@ -397,6 +494,89 @@ export default function DuplicateRecipeManager() {
               </Card>
             ))}
           </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="empty">
+              {emptyRecipes.length === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center">
+                    <CheckCircle2 className="w-12 h-12 text-green-600 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">No Empty Recipes</h3>
+                    <p className="text-gray-600">All recipes have ingredients.</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="space-y-4">
+                  <Alert className="bg-orange-50 border-orange-200">
+                    <AlertTriangle className="w-4 h-4 text-orange-600" />
+                    <AlertDescription>
+                      <span className="font-semibold text-orange-800">Found {emptyRecipes.length} empty recipes</span>
+                      <p className="text-sm text-orange-700 mt-1">
+                        These recipes have no ingredients. They can be safely deleted.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
+
+                  <div className="flex justify-end">
+                    <Button
+                      onClick={bulkDeleteEmptyRecipes}
+                      variant="destructive"
+                      disabled={emptyRecipes.length === 0}
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete All Empty Recipes
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-4">
+                    {emptyRecipes.map((recipe) => (
+                      <Card key={recipe.id} className="border-orange-200">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <CardTitle className="text-lg">{recipe.name || 'Untitled'}</CardTitle>
+                              <CardDescription className="text-xs mt-1">
+                                Created: {new Date(recipe.created_at).toLocaleDateString()}
+                              </CardDescription>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => deleteEmptyRecipe(recipe.id, recipe.name)}
+                            >
+                              <Trash2 className="w-3 h-3 mr-1" />
+                              Delete
+                            </Button>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div>
+                              <span className="text-gray-600">Ingredients:</span>
+                              <span className="ml-2 font-semibold text-orange-600">None</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Description:</span>
+                              <span className="ml-2">{recipe.description ? '✓' : '✗'}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Image:</span>
+                              <span className="ml-2">{recipe.image_url ? '✓' : '✗'}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Category:</span>
+                              <span className="ml-2">{recipe.category || 'None'}</span>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </TabsContent>
+          </>
         )}
       </div>
     </div>
