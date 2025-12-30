@@ -38,9 +38,14 @@ const FIELD_CONFIG = [
   { key: 'purchase_price', label: 'Price ($)', aliases: ['purchase_price', 'cost', 'unit cost'] },
   { key: 'case_price', label: 'Case Price ($)', aliases: ['case_price', 'case cost'] },
   { key: 'variant_size', label: 'Size', aliases: ['variant_size', 'size', 'volume'] },
-  { key: 'bottle_image_url', label: 'Image URL', aliases: ['bottle_image_url', 'image'] },
+  { key: 'style', label: 'Style', aliases: ['style'] },
+  { key: 'substyle', label: 'Sub-Style', aliases: ['substyle'] },
+  { key: 'flavor', label: 'Flavor', aliases: ['flavor'] },
+  { key: 'region', label: 'Region', aliases: ['region'] },
+  { key: 'abv', label: 'ABV (%)', aliases: ['abv'] },
   { key: 'tier', label: 'Tier', aliases: ['tier'] },
-  { key: 'exclusive', label: 'Exclusive', aliases: ['exclusive'] },
+  { key: 'exclusive', label: 'Exclusive?', aliases: ['exclusive'] },
+  { key: 'bottle_image_url', label: 'Image URL', aliases: ['bottle_image_url', 'image'] },
 ];
 
 const formatCurrency = (val) => {
@@ -53,16 +58,13 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
   const [rawRows, setRawRows] = useState([]);
   const [rawHeaders, setRawHeaders] = useState([]);
   const [mapping, setMapping] = useState({});
-  
-  // Data from Server
   const [reportData, setReportData] = useState([]); 
   const [stats, setStats] = useState({ new: 0, updated: 0, unchanged: 0 });
-  
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 1. File Upload & Parse
+  // 1. File Upload
   const handleFileSelect = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -86,6 +88,9 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
       FIELD_CONFIG.forEach(field => {
         let match = headers.find(h => h === field.key);
         if (!match) match = headers.find(h => field.aliases.includes(h.toLowerCase()));
+        if (!match && !['purchase_price', 'case_price'].includes(field.key)) {
+             match = headers.find(h => h.toLowerCase().includes(field.label.toLowerCase()));
+        }
         if (match) newMap[field.key] = match;
       });
       setMapping(newMap);
@@ -94,12 +99,12 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
     } catch (err) { setErrorMsg("Error parsing CSV: " + err.message); }
   };
 
-  // 2. Send to Server for "Dry Run" (Audit)
+  // 2. BATCHED Audit (The Fix for Scalability)
   const handleGenerateReport = async () => {
     setStep('processing');
-    setStatus('Analyzing spreadsheet on server...');
+    setProgress(0);
+    setStatus('Analyzing changes...');
     
-    // Clean Data
     const cleanRows = rawRows.map(row => {
         const newRow = {};
         Object.entries(mapping).forEach(([dbKey, csvHeader]) => {
@@ -109,24 +114,43 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
     }).filter(r => r.name);
 
     try {
-        const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
-            body: { rows: cleanRows, dry_run: true }
-        });
+        const BATCH_SIZE = 250; // Small batch size prevents timeouts
+        const total = cleanRows.length;
+        let allReports = [];
+        let accumulatedStats = { new: 0, updated: 0, unchanged: 0 };
+        let processedCount = 0;
 
-        if (error) throw error;
-        if (data.error) throw new Error(data.error);
+        for (let i = 0; i < total; i += BATCH_SIZE) {
+            const batch = cleanRows.slice(i, i + BATCH_SIZE);
+            setStatus(`Auditing items ${i+1} - ${Math.min(i+BATCH_SIZE, total)}...`);
 
-        setReportData(data.report);
-        setStats(data.stats);
+            const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
+                body: { rows: batch, dry_run: true }
+            });
+
+            if (error) throw error;
+            if (data.error) throw new Error(data.error);
+
+            allReports = [...allReports, ...data.report];
+            accumulatedStats.new += data.stats.new;
+            accumulatedStats.updated += data.stats.updated;
+            accumulatedStats.unchanged += data.stats.unchanged;
+            
+            processedCount += batch.length;
+            setProgress(Math.round((processedCount / total) * 100));
+        }
+
+        setReportData(allReports);
+        setStats(accumulatedStats);
         setStep('audit');
     } catch (err) {
         console.error(err);
-        setErrorMsg("Server analysis failed: " + err.message);
+        setErrorMsg("Audit failed: " + err.message);
         setStep('map');
     }
   };
 
-  // 3. Confirm Import (Send in Batches)
+  // 3. BATCHED Import
   const handleImport = async () => {
     setStep('processing');
     setProgress(0);
@@ -134,14 +158,13 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
     
     try {
         const rows = reportData; 
-        const BATCH_SIZE = 100;
+        const BATCH_SIZE = 200;
         let count = 0;
 
         for (let i = 0; i < rows.length; i += BATCH_SIZE) {
             const batch = rows.slice(i, i + BATCH_SIZE);
             setStatus(`Saving batch ${Math.floor(i/BATCH_SIZE)+1} of ${Math.ceil(rows.length/BATCH_SIZE)}...`);
             
-            // Execute Save (No dry_run)
             const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
                 body: { rows: batch, dry_run: false }
             });
@@ -166,6 +189,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
     <Card className="max-w-md mx-auto mt-10 bg-emerald-50 border-emerald-100 p-8 text-center shadow-sm">
         <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto mb-4" />
         <h3 className="text-xl font-bold text-emerald-900">Import Successful</h3>
+        <p className="text-emerald-700 mt-2">Your inventory has been updated.</p>
     </Card>
   );
 
@@ -173,13 +197,13 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
     <Card className="max-w-6xl mx-auto mt-6 shadow-md border-gray-200">
       <CardHeader className="border-b bg-gray-50/50 pb-4">
         <div className="flex justify-between items-center">
-            <CardTitle className="text-lg flex items-center gap-2"><FileSpreadsheet className="w-5 h-5 text-blue-600"/> Bulk Importer</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2"><FileSpreadsheet className="w-5 h-5 text-blue-600"/> Scalable Importer</CardTitle>
             <div className="text-xs font-medium text-gray-500">Step: {step.toUpperCase()}</div>
         </div>
       </CardHeader>
       
       <CardContent className="p-0">
-        {errorMsg && <div className="m-4 p-3 bg-red-50 text-red-700 text-sm rounded flex items-center gap-2"><AlertCircle className="w-4 h-4"/>{errorMsg}</div>}
+        {errorMsg && <div className="m-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200 flex items-center gap-2"><AlertCircle className="w-4 h-4"/>{errorMsg}</div>}
 
         {step === 'upload' && (
           <div className="text-center py-16 px-6">
@@ -217,7 +241,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
             </div>
             <div className="border-t p-4 flex justify-end gap-2 bg-gray-50">
                 <Button variant="outline" onClick={() => setStep('upload')}>Back</Button>
-                <Button onClick={handleGenerateReport} className="bg-blue-600">Next: Review Changes</Button>
+                <Button onClick={handleGenerateReport} className="bg-blue-600">Next: Audit Changes</Button>
             </div>
           </div>
         )}
@@ -229,7 +253,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
                     <h4 className="font-bold text-blue-900">Audit Complete</h4>
                     <div className="flex gap-6 mt-2 text-sm">
                         <span className="text-green-600 font-bold bg-green-50 px-2 py-1 rounded border border-green-200">{stats.new} New Items</span>
-                        <span className="text-orange-600 font-bold bg-orange-50 px-2 py-1 rounded border border-orange-200">{stats.updated} To Update</span>
+                        <span className="text-orange-600 font-bold bg-orange-50 px-2 py-1 rounded border border-orange-200">{stats.updated} Updates</span>
                         <span className="text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200">{stats.unchanged} Unchanged</span>
                     </div>
                 </div>
@@ -245,7 +269,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
                             <TableHead className="w-[30%]">Item</TableHead>
                             <TableHead className="w-[15%]">SKU</TableHead>
                             <TableHead className="w-[10%]">Status</TableHead>
-                            <TableHead className="w-[45%]">Updates</TableHead>
+                            <TableHead className="w-[45%]">Changes Detected</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -268,7 +292,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
                                                 <div key={idx} className="flex items-center gap-2 text-xs bg-orange-50/50 p-1.5 rounded border border-orange-100">
                                                     <span className="font-bold text-gray-600 w-16">{c.field}:</span>
                                                     {c.field === 'Image' ? (
-                                                        <span className="text-blue-600 flex items-center"><ImageIcon className="w-3 h-3 mr-1"/> URL Changed</span>
+                                                        <span className="text-blue-600 flex items-center"><ImageIcon className="w-3 h-3 mr-1"/> URL Updated</span>
                                                     ) : (
                                                         <div className="flex items-center gap-2">
                                                             <span className="line-through text-red-300 decoration-red-300">
