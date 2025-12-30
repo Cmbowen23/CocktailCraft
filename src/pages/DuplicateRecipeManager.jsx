@@ -260,6 +260,96 @@ export default function DuplicateRecipeManager() {
     }
   };
 
+  const keepBestDeleteOthers = async (group) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      toast.error('Admin access required');
+      return;
+    }
+
+    // Find the version with highest completeness score
+    let bestVersion = group.versions[0];
+    let bestScore = getDataCompleteness(bestVersion);
+
+    for (const version of group.versions) {
+      const score = getDataCompleteness(version);
+      if (score > bestScore) {
+        bestScore = score;
+        bestVersion = version;
+      }
+    }
+
+    // Get versions to delete
+    const toDelete = group.versions.filter(v => v.id !== bestVersion.id);
+
+    const confirmed = window.confirm(
+      `Keep "${bestVersion.name}" (${bestScore}% complete) and delete ${toDelete.length} other version(s)?\n\nVersions to delete:\n${toDelete.map(v => `- Created ${new Date(v.created_at).toLocaleDateString()} (${getDataCompleteness(v)}% complete)`).join('\n')}\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      let deleted = 0;
+      for (const version of toDelete) {
+        await base44.entities.Recipe.delete(version.id);
+        deleted++;
+      }
+      toast.success(`Kept best version, deleted ${deleted} duplicate(s)`);
+      loadDuplicates();
+    } catch (err) {
+      console.error('Failed to delete duplicates:', err);
+      toast.error('Failed to delete duplicates: ' + err.message);
+    }
+  };
+
+  const bulkCleanupAllDuplicates = async () => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      toast.error('Admin access required');
+      return;
+    }
+
+    // Calculate total versions to delete
+    let totalToDelete = 0;
+    duplicates.forEach(group => {
+      totalToDelete += group.versions.length - 1; // Keep 1, delete the rest
+    });
+
+    const confirmed = window.confirm(
+      `Auto-clean ALL ${duplicates.length} duplicate groups?\n\nThis will:\n- Keep the most complete version of each recipe\n- Delete ${totalToDelete} duplicate recipe(s)\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      let totalDeleted = 0;
+      for (const group of duplicates) {
+        // Find best version for this group
+        let bestVersion = group.versions[0];
+        let bestScore = getDataCompleteness(bestVersion);
+
+        for (const version of group.versions) {
+          const score = getDataCompleteness(version);
+          if (score > bestScore) {
+            bestScore = score;
+            bestVersion = version;
+          }
+        }
+
+        // Delete all except best
+        const toDelete = group.versions.filter(v => v.id !== bestVersion.id);
+        for (const version of toDelete) {
+          await base44.entities.Recipe.delete(version.id);
+          totalDeleted++;
+        }
+      }
+
+      toast.success(`Cleaned up ${duplicates.length} groups, deleted ${totalDeleted} duplicates`);
+      loadDuplicates();
+    } catch (err) {
+      console.error('Failed to bulk cleanup:', err);
+      toast.error('Failed to bulk cleanup: ' + err.message);
+    }
+  };
+
   const getDataCompleteness = (version) => {
     let score = 0;
     if (version.has_ingredients) score += 40;
@@ -355,15 +445,27 @@ export default function DuplicateRecipeManager() {
               <AlertDescription>
                 <span className="font-semibold text-yellow-800">Found {duplicates.length} duplicate recipe groups</span>
                 <p className="text-sm text-yellow-700 mt-1">
-                  Review each group carefully before deleting. All deletions are logged and can be audited.
+                  Use "Clean All" to automatically keep the best version of each recipe, or clean up groups individually.
                 </p>
               </AlertDescription>
             </Alert>
 
+            <div className="flex justify-end">
+              <Button
+                onClick={bulkCleanupAllDuplicates}
+                variant="default"
+                size="lg"
+                disabled={duplicates.length === 0}
+              >
+                <GitMerge className="w-4 h-4 mr-2" />
+                Clean All Duplicates (Keep Best Versions)
+              </Button>
+            </div>
+
             {duplicates.map((group) => (
               <Card key={group.name} className="overflow-hidden">
                 <CardHeader className="bg-gray-50 border-b">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between mb-3">
                     <div>
                       <CardTitle className="text-xl">{group.name}</CardTitle>
                       <CardDescription>
@@ -374,6 +476,17 @@ export default function DuplicateRecipeManager() {
                       <Copy className="w-3 h-3 mr-1" />
                       {group.versions.length} duplicates
                     </Badge>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      onClick={() => keepBestDeleteOthers(group)}
+                      variant="outline"
+                      size="sm"
+                      className="border-green-600 text-green-700 hover:bg-green-50"
+                    >
+                      <GitMerge className="w-3 h-3 mr-2" />
+                      Keep Best, Delete Others
+                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent className="p-6">
