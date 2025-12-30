@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import UnitAutocomplete from "@/components/ui/unit-autocomplete";
 import { parseContainerSize } from '../utils/unitConverter';
 import { convertToMl, convertWithCustomConversions } from '../utils/costCalculations';
+import { findOptimalScaleFactor } from '../utils/batchScalingAlgorithm';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { updateRecipeBatchSettings } from '../utils/batchSettingsService';
@@ -45,64 +46,6 @@ const roundToIncrement = (value, increments) => {
         if (deviation < minDeviation) { minDeviation = deviation; bestRounded = rounded; }
     }
     return bestRounded;
-};
-
-// --- BARTENDER ALGORITHM (Whole Number Priority) ---
-const findOptimalScaleFactor = (originalBatchAmountsMl, ingredientOverrides, batchIngredientUnits, allIngredients, containerVolumeMl) => {
-    const batchIngredients = Array.from(originalBatchAmountsMl.entries())
-        .filter(([name]) => ingredientOverrides[name] === 'batch')
-        .map(([name, originalMl]) => ({
-            name,
-            originalMl,
-            targetUnit: batchIngredientUnits[name] || 'ml',
-            matchedIngredient: findMatchingIngredient(name, allIngredients),
-            isSmall: ['dash', 'drop', 'spray', 'pinch'].includes(batchIngredientUnits[name]?.toLowerCase()) 
-        }))
-        .filter(i => i.originalMl > 0);
-
-    if (batchIngredients.length === 0) return 1;
-
-    const singleBatchTotalMl = batchIngredients.reduce((sum, i) => sum + i.originalMl, 0);
-    const maxScale = containerVolumeMl / singleBatchTotalMl;
-    
-    if (maxScale < 1) return 1;
-
-    // Find Base Ingredient (Largest)
-    const baseIngredient = batchIngredients.reduce((prev, current) => (prev.originalMl > current.originalMl) ? prev : current);
-    const baseAmountTargetUnit = convertWithCustomConversions(baseIngredient.originalMl, 'ml', baseIngredient.targetUnit, baseIngredient.matchedIngredient);
-    const maxBaseAmount = baseAmountTargetUnit * maxScale;
-    
-    let bestScale = 1;
-    let bestScore = -Infinity;
-    
-    // Check steps of 0.5 for the Base Ingredient
-    const candidateScales = new Set([maxScale]);
-    for (let amount = Math.floor(maxBaseAmount); amount > 0; amount -= 0.5) {
-        if (amount <= 0) break;
-        candidateScales.add(amount / baseAmountTargetUnit);
-        if (amount / maxBaseAmount < 0.5) break; 
-    }
-
-    candidateScales.forEach(scale => {
-        let score = 0;
-        let isInvalid = false;
-        for (const ing of batchIngredients) {
-            if (ing.isSmall) continue; 
-            const scaledMl = ing.originalMl * scale;
-            const scaledAmount = convertWithCustomConversions(scaledMl, 'ml', ing.targetUnit, ing.matchedIngredient);
-            const nearestQuarter = Math.round(scaledAmount * 4) / 4;
-            const deviation = Math.abs(scaledAmount - nearestQuarter);
-            if (scaledAmount > 0.5 && deviation / scaledAmount > 0.08) { isInvalid = true; break; }
-            if (Math.abs(scaledAmount - Math.round(scaledAmount)) < 0.01) score += 10;
-            else if (Math.abs(scaledAmount % 1 - 0.5) < 0.01) score += 5;
-            score -= (deviation / scaledAmount) * 100;
-        }
-        const fillPercent = scale / maxScale;
-        score += fillPercent * 20; 
-        if (!isInvalid && score > bestScore) { bestScore = score; bestScale = scale; }
-    });
-
-    return bestScale;
 };
 
 export default function BatchScalingModal({ isOpen, onClose, recipe, allIngredients = [], onSave, embedded = false, initialScale = 1 }) {
