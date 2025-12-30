@@ -6,11 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ImageIcon, ExternalLink } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
-// --- PARSER ---
+// --- ROBUST CSV PARSER ---
 const parseCSVLine = (text) => {
   const result = [];
   let curValue = '';
@@ -58,10 +57,19 @@ const FIELD_CONFIG = [
   { key: 'bottle_image_url', label: 'Image URL', aliases: ['bottle_image_url', 'image'] },
 ];
 
+const parseNumber = (val) => {
+    if (!val) return NaN;
+    const clean = String(val).replace(/[^0-9.-]+/g, '');
+    return parseFloat(clean);
+};
+
 const formatCurrency = (val) => {
-  const num = parseFloat(val);
+  const num = parseNumber(val);
   return isNaN(num) ? '-' : `$${num.toFixed(2)}`;
 };
+
+// Helper to normalize SKUs for comparison (handles strings vs numbers)
+const normalizeSku = (sku) => String(sku || '').trim().toLowerCase();
 
 export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel }) {
   const [step, setStep] = useState('upload'); 
@@ -73,10 +81,9 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 1. Fetch FULL DATA for Comprehensive Diff
+  // 1. Fetch FULL DATA for Comparison
   useEffect(() => {
     const fetchExisting = async () => {
-      // We select EVERYTHING so we can catch any change
       const { data, error } = await supabase
         .from('product_variants')
         .select(`
@@ -89,10 +96,10 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         const map = new Map();
         data.forEach(v => {
            if(v.sku_number) {
-               // Flatten structure for easier comparison
-               const flat = { ...v, ...v.ingredient }; 
+               const flat = { ...v, ...(v.ingredient || {}) }; 
                delete flat.ingredient;
-               map.set(v.sku_number.toString(), flat);
+               // Store using NORMALIZED SKU key
+               map.set(normalizeSku(v.sku_number), flat);
            }
         });
         setExistingSkus(map);
@@ -161,26 +168,28 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         };
       }
 
-      // --- FULL DIFF LOGIC ---
-      const sku = newRow.sku_number;
+      // --- DIFF LOGIC (Fixed) ---
+      const rawSku = newRow.sku_number;
+      const skuKey = normalizeSku(rawSku); // Normalize CSV SKU too
+      
       let changeType = 'NEW'; 
       const changes = [];
 
-      if (sku && existingSkus.has(sku)) {
-        const existing = existingSkus.get(sku);
+      if (skuKey && existingSkus.has(skuKey)) {
+        const existing = existingSkus.get(skuKey);
         changeType = 'SAME';
 
         const checkChange = (field, label, type = 'string') => {
             let newVal = newRow[field];
             let oldVal = existing[field];
             
-            if (newVal === undefined || newVal === '') return; // Don't wipe existing data with empty csv cells
+            if (newVal === undefined || newVal === '') return;
 
             let isDifferent = false;
 
             if (type === 'currency' || type === 'number') {
-                const n = parseFloat(newVal);
-                const o = parseFloat(oldVal);
+                const n = parseNumber(newVal);
+                const o = parseNumber(oldVal);
                 if (isNaN(n)) return; 
                 if (Math.abs(n - (o || 0)) > 0.01) isDifferent = true;
             } else if (type === 'boolean') {
@@ -188,7 +197,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                 const o = Boolean(oldVal);
                 if (n !== o) isDifferent = true;
             } else {
-                // String normalize
                 if (String(newVal).trim() !== String(oldVal || '').trim()) isDifferent = true;
             }
 
@@ -203,7 +211,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
             }
         };
 
-        // Scan EVERY field for updates
         checkChange('purchase_price', 'Price', 'currency');
         checkChange('case_price', 'Case Price', 'currency');
         checkChange('supplier', 'Supplier');
@@ -219,7 +226,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         checkChange('bottle_image_url', 'Image');
         checkChange('bottles_per_case', 'Bt/Case', 'number');
         checkChange('purchase_quantity', 'Pur. Qty', 'number');
-    }
+      }
 
       groups[nameKey].variants.push({ ...newRow, changeType, changes });
     });
@@ -389,7 +396,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            <TooltipProvider>
                             {groupedData.map((group, i) => (
                                 <React.Fragment key={i}>
                                     <TableRow className="bg-gray-50 border-t border-gray-200">
@@ -413,29 +419,34 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                             </TableCell>
                                             <TableCell className="text-sm py-2">
                                                 {v.changes.length > 0 ? (
-                                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
                                                         {v.changes.map((c, cIdx) => (
                                                             <div key={cIdx} className="flex items-center gap-2 text-xs bg-white/50 p-1 rounded">
-                                                                <span className="font-semibold text-gray-500">{c.field}:</span>
+                                                                <span className="font-semibold text-gray-500 min-w-[60px]">{c.field}:</span>
                                                                 
                                                                 {c.field === 'Image' ? (
-                                                                     <Tooltip>
-                                                                        <TooltipTrigger className="flex items-center gap-1 text-blue-600 underline">
-                                                                            <ImageIcon className="w-3 h-3"/> View Change
-                                                                        </TooltipTrigger>
-                                                                        <TooltipContent className="flex gap-2 p-2">
-                                                                            <div className="text-center"><p className="mb-1 text-xs">Old</p><img src={c.old} className="w-16 h-16 object-cover border"/></div>
-                                                                            <ArrowRight className="w-4 h-4 mt-8 text-gray-400"/>
-                                                                            <div className="text-center"><p className="mb-1 text-xs">New</p><img src={c.new} className="w-16 h-16 object-cover border"/></div>
-                                                                        </TooltipContent>
-                                                                     </Tooltip>
+                                                                     <div className="group relative flex items-center gap-1 text-blue-600 cursor-pointer">
+                                                                        <ImageIcon className="w-3 h-3"/> View Change
+                                                                        <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 p-2 bg-white border shadow-lg rounded w-64">
+                                                                            <div className="flex gap-2">
+                                                                                <div className="w-1/2">
+                                                                                    <p className="text-[10px] text-gray-400 mb-1">Old</p>
+                                                                                    {c.old ? <img src={c.old} className="w-full h-24 object-contain bg-gray-100"/> : <span className="text-xs">None</span>}
+                                                                                </div>
+                                                                                <div className="w-1/2">
+                                                                                    <p className="text-[10px] text-gray-400 mb-1">New</p>
+                                                                                    {c.new ? <img src={c.new} className="w-full h-24 object-contain bg-gray-100"/> : <span className="text-xs">None</span>}
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                     </div>
                                                                 ) : (
-                                                                    <div className="flex items-center gap-1">
-                                                                        <span className="text-gray-400 line-through decoration-red-400">
+                                                                    <div className="flex items-center gap-1 overflow-hidden">
+                                                                        <span className="text-gray-400 line-through decoration-red-400 truncate max-w-[80px]">
                                                                             {c.type === 'currency' ? formatCurrency(c.old) : (c.old || 'Empty')}
                                                                         </span>
-                                                                        <ArrowRight className="w-3 h-3 text-gray-400"/>
-                                                                        <span className="text-green-600 font-bold bg-green-50 px-1 rounded">
+                                                                        <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0"/>
+                                                                        <span className="text-green-600 font-bold bg-green-50 px-1 rounded truncate max-w-[80px]">
                                                                             {c.type === 'currency' ? formatCurrency(c.new) : c.new}
                                                                         </span>
                                                                     </div>
@@ -451,7 +462,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                     ))}
                                 </React.Fragment>
                             ))}
-                            </TooltipProvider>
                         </TableBody>
                     </Table>
                 </div>
