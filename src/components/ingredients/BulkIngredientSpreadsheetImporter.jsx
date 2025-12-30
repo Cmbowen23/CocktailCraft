@@ -6,10 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ImageIcon, ExternalLink } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ImageIcon, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
-// --- ROBUST CSV PARSER ---
+// --- PARSER ---
 const parseCSVLine = (text) => {
   const result = [];
   let curValue = '';
@@ -68,7 +68,6 @@ const formatCurrency = (val) => {
   return isNaN(num) ? '-' : `$${num.toFixed(2)}`;
 };
 
-// Helper to normalize SKUs for comparison (handles strings vs numbers)
 const normalizeSku = (sku) => String(sku || '').trim().toLowerCase();
 
 export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel }) {
@@ -77,35 +76,58 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const [rawRows, setRawRows] = useState([]);
   const [mapping, setMapping] = useState({});
   const [existingSkus, setExistingSkus] = useState(new Map()); 
+  const [isFetchingDB, setIsFetchingDB] = useState(true);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 1. Fetch FULL DATA for Comparison
+  // 1. Fetch ALL Data (Paginated to bypass 1000 row limit)
   useEffect(() => {
-    const fetchExisting = async () => {
-      const { data, error } = await supabase
-        .from('product_variants')
-        .select(`
-            sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive, 
-            bottles_per_case, purchase_quantity, purchase_unit,
-            ingredient:ingredient_id ( name, supplier, category, spirit_type, style, substyle, flavor, region, description, abv )
-        `);
-      
-      if (!error && data) {
+    const fetchAllExisting = async () => {
+      setIsFetchingDB(true);
+      const allVariants = [];
+      let from = 0;
+      const step = 1000;
+      let more = true;
+
+      try {
+        while (more) {
+            const { data, error } = await supabase
+                .from('product_variants')
+                .select(`
+                    sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive, 
+                    bottles_per_case, purchase_quantity, purchase_unit,
+                    ingredient:ingredient_id ( name, supplier, category, spirit_type, style, substyle, flavor, region, description, abv )
+                `)
+                .range(from, from + step - 1);
+
+            if (error) throw error;
+            if (data.length > 0) {
+                allVariants.push(...data);
+                from += step;
+                if (data.length < step) more = false; // End of list
+            } else {
+                more = false;
+            }
+        }
+
         const map = new Map();
-        data.forEach(v => {
+        allVariants.forEach(v => {
            if(v.sku_number) {
                const flat = { ...v, ...(v.ingredient || {}) }; 
                delete flat.ingredient;
-               // Store using NORMALIZED SKU key
                map.set(normalizeSku(v.sku_number), flat);
            }
         });
         setExistingSkus(map);
+      } catch (err) {
+        console.error("DB Fetch Error:", err);
+        setErrorMsg("Failed to load existing inventory. Duplicates may not be detected.");
+      } finally {
+        setIsFetchingDB(false);
       }
     };
-    fetchExisting();
+    fetchAllExisting();
   }, []);
 
   // 2. Handle File
@@ -168,14 +190,14 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         };
       }
 
-      // --- DIFF LOGIC (Fixed) ---
       const rawSku = newRow.sku_number;
-      const skuKey = normalizeSku(rawSku); // Normalize CSV SKU too
+      const skuKey = normalizeSku(rawSku);
       
       let changeType = 'NEW'; 
       const changes = [];
 
-      if (skuKey && existingSkus.has(skuKey)) {
+      // Only check existing if we have SKUs loaded
+      if (skuKey && existingSkus.size > 0 && existingSkus.has(skuKey)) {
         const existing = existingSkus.get(skuKey);
         changeType = 'SAME';
 
@@ -191,6 +213,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                 const n = parseNumber(newVal);
                 const o = parseNumber(oldVal);
                 if (isNaN(n)) return; 
+                // Ignore tiny float differences
                 if (Math.abs(n - (o || 0)) > 0.01) isDifferent = true;
             } else if (type === 'boolean') {
                 const n = String(newVal).toLowerCase() === 'true';
@@ -215,17 +238,9 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         checkChange('case_price', 'Case Price', 'currency');
         checkChange('supplier', 'Supplier');
         checkChange('category', 'Category');
-        checkChange('spirit_type', 'Spirit Type');
-        checkChange('style', 'Style');
-        checkChange('substyle', 'Sub-Style');
-        checkChange('flavor', 'Flavor');
-        checkChange('region', 'Region');
-        checkChange('abv', 'ABV', 'number');
+        checkChange('bottle_image_url', 'Image');
         checkChange('tier', 'Tier');
         checkChange('exclusive', 'Exclusive', 'boolean');
-        checkChange('bottle_image_url', 'Image');
-        checkChange('bottles_per_case', 'Bt/Case', 'number');
-        checkChange('purchase_quantity', 'Pur. Qty', 'number');
       }
 
       groups[nameKey].variants.push({ ...newRow, changeType, changes });
@@ -238,7 +253,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const handleImport = async () => {
     setStep('processing');
     setProgress(0);
-    setStatus('Initializing import...');
+    setStatus('Starting import...');
 
     try {
       const flatRows = [];
@@ -254,7 +269,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
 
       for (let i = 0; i < total; i += BATCH_SIZE) {
         const batch = flatRows.slice(i, i + BATCH_SIZE);
-        setStatus(`Importing batch ${Math.floor(i/BATCH_SIZE) + 1}...`);
+        setStatus(`Importing items ${i+1} - ${Math.min(i+BATCH_SIZE, total)}...`);
         
         const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
           body: { rows: batch }
@@ -267,7 +282,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         setProgress(Math.round((processed / total) * 100));
       }
 
-      setStatus('Done!');
+      setStatus('Complete!');
       setStep('complete');
       setTimeout(onComplete, 2000);
 
@@ -294,13 +309,19 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                 <FileSpreadsheet className="w-5 h-5 text-blue-600"/>
                 <CardTitle className="text-lg">Bulk Importer</CardTitle>
             </div>
-            <div className="flex items-center gap-2 text-xs font-medium text-gray-500">
-                <span className={`px-2 py-1 rounded ${step === 'upload' ? 'bg-blue-100 text-blue-700' : ''}`}>1. Upload</span>
-                <ArrowRight className="w-3 h-3"/>
-                <span className={`px-2 py-1 rounded ${step === 'map' ? 'bg-blue-100 text-blue-700' : ''}`}>2. Map</span>
-                <ArrowRight className="w-3 h-3"/>
-                <span className={`px-2 py-1 rounded ${step === 'audit' ? 'bg-blue-100 text-blue-700' : ''}`}>3. Audit</span>
-            </div>
+            {isFetchingDB ? (
+                <div className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 px-3 py-1 rounded-full animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin"/> Loading Database...
+                </div>
+            ) : (
+                <div className="flex items-center gap-2 text-xs font-medium text-gray-500">
+                     <span className={`px-2 py-1 rounded ${step === 'upload' ? 'bg-blue-100 text-blue-700' : ''}`}>1. Upload</span>
+                    <ArrowRight className="w-3 h-3"/>
+                    <span className={`px-2 py-1 rounded ${step === 'map' ? 'bg-blue-100 text-blue-700' : ''}`}>2. Map</span>
+                    <ArrowRight className="w-3 h-3"/>
+                    <span className={`px-2 py-1 rounded ${step === 'audit' ? 'bg-blue-100 text-blue-700' : ''}`}>3. Audit</span>
+                </div>
+            )}
         </div>
       </CardHeader>
       
@@ -314,16 +335,21 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         {/* STEP 1: UPLOAD */}
         {step === 'upload' && (
           <div className="text-center py-16 px-6">
-             <Label htmlFor="file" className="cursor-pointer inline-flex flex-col items-center gap-4 p-8 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition w-full max-w-lg">
+             {isFetchingDB && (
+                 <div className="mb-4 text-sm text-gray-500 flex justify-center items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin"/> Syncing existing inventory... please wait.
+                 </div>
+             )}
+             <Label htmlFor="file" className={`cursor-pointer inline-flex flex-col items-center gap-4 p-8 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition w-full max-w-lg ${isFetchingDB ? 'opacity-50 pointer-events-none' : ''}`}>
                 <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
                     <FileSpreadsheet className="w-6 h-6"/>
                 </div>
                 <div className="text-center">
                     <span className="text-blue-600 font-semibold text-lg">Click to Upload CSV</span>
-                    <p className="text-sm text-gray-500 mt-1">Universal Template Support</p>
+                    <p className="text-sm text-gray-500 mt-1">Ready for 3,000+ Items</p>
                 </div>
              </Label>
-             <Input id="file" type="file" accept=".csv" className="hidden" onChange={handleFileSelect} />
+             <Input id="file" type="file" accept=".csv" className="hidden" onChange={handleFileSelect} disabled={isFetchingDB} />
           </div>
         )}
 
@@ -423,22 +449,9 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                                         {v.changes.map((c, cIdx) => (
                                                             <div key={cIdx} className="flex items-center gap-2 text-xs bg-white/50 p-1 rounded">
                                                                 <span className="font-semibold text-gray-500 min-w-[60px]">{c.field}:</span>
-                                                                
                                                                 {c.field === 'Image' ? (
-                                                                     <div className="group relative flex items-center gap-1 text-blue-600 cursor-pointer">
-                                                                        <ImageIcon className="w-3 h-3"/> View Change
-                                                                        <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 p-2 bg-white border shadow-lg rounded w-64">
-                                                                            <div className="flex gap-2">
-                                                                                <div className="w-1/2">
-                                                                                    <p className="text-[10px] text-gray-400 mb-1">Old</p>
-                                                                                    {c.old ? <img src={c.old} className="w-full h-24 object-contain bg-gray-100"/> : <span className="text-xs">None</span>}
-                                                                                </div>
-                                                                                <div className="w-1/2">
-                                                                                    <p className="text-[10px] text-gray-400 mb-1">New</p>
-                                                                                    {c.new ? <img src={c.new} className="w-full h-24 object-contain bg-gray-100"/> : <span className="text-xs">None</span>}
-                                                                                </div>
-                                                                            </div>
-                                                                        </div>
+                                                                     <div className="flex items-center gap-1 text-blue-600">
+                                                                        <ImageIcon className="w-3 h-3"/> Image Updated
                                                                      </div>
                                                                 ) : (
                                                                     <div className="flex items-center gap-1 overflow-hidden">
@@ -455,7 +468,10 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                                         ))}
                                                     </div>
                                                 ) : (
-                                                    <span className="text-gray-300 text-xs">-</span>
+                                                    // ALWAYS SHOW PRICE, even if no changes
+                                                    <span className="text-gray-500">
+                                                        {formatCurrency(v.purchase_price)}
+                                                    </span>
                                                 )}
                                             </TableCell>
                                         </TableRow>
