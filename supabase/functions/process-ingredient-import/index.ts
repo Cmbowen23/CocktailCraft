@@ -11,106 +11,168 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { rows } = await req.json()
+    const { rows, dry_run } = await req.json()
     
-    // 1. CREATE CLIENT WITH USER CONTEXT
-    // We use the Authorization header from the request. 
-    // This ensures RLS (Row Level Security) is respected.
-    // User A can only insert into User A's rows.
+    // 1. Initialize Supabase with the USER'S context (Secure & Scalable)
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
     )
 
-    // 2. Validate User
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    if (userError || !user) throw new Error("Unauthorized: User not found")
+    // --- AUDIT MODE (DRY RUN) ---
+    // Compares CSV rows against DB without saving
+    if (dry_run) {
+        // Fetch all existing SKUs for comparison
+        const { data: allVariants, error } = await supabaseClient
+            .from('product_variants')
+            .select(`
+                sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive, 
+                bottles_per_case, purchase_quantity, purchase_unit,
+                ingredient:ingredient_id ( name, supplier, category )
+            `);
 
-    // 3. Process Ingredients (With User Context)
-    // We map rows to the DB structure. 
-    const ingredientsToUpsert = [];
-    const ingredientMap = new Map(); // name -> id (if exists)
+        if (error) throw new Error("Inventory Load Failed: " + error.message);
 
-    // A. Resolve Ingredients (We need IDs to link variants)
-    // We fetch existing ingredients for THIS user (RLS handles filtering)
-    const { data: existingIngs } = await supabaseClient
-        .from('ingredients')
-        .select('id, name');
-        
-    if (existingIngs) existingIngs.forEach(i => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
+        // Create fast lookup map
+        const inventoryMap = new Map();
+        allVariants.forEach((v: any) => {
+            if (v.sku_number) {
+                // Flatten ingredient data for easier diffing
+                const flat = { ...v, ...(v.ingredient || {}) };
+                delete flat.ingredient;
+                inventoryMap.set(String(v.sku_number).trim().toLowerCase(), flat);
+            }
+        });
+
+        const report = [];
+        const stats = { new: 0, updated: 0, unchanged: 0 };
+
+        for (const row of rows) {
+            if (!row.name) continue;
+
+            const skuKey = String(row.sku_number || '').trim().toLowerCase();
+            const existing = inventoryMap.get(skuKey);
+            
+            let status = 'NEW';
+            const changes = [];
+
+            if (existing) {
+                status = 'SAME';
+
+                // Helper to detect changes
+                const check = (field: string, label: string, type = 'string') => {
+                    let newVal = row[field];
+                    let oldVal = existing[field];
+                    
+                    if (newVal === undefined || newVal === '') return; 
+
+                    let isDiff = false;
+
+                    if (type === 'currency' || type === 'number') {
+                        const n = parseFloat(String(newVal).replace(/[^0-9.-]/g, ''));
+                        const o = parseFloat(String(oldVal).replace(/[^0-9.-]/g, ''));
+                        if (isNaN(n)) return; 
+                        if (Math.abs(n - (o || 0)) > 0.01) isDiff = true;
+                    } else if (type === 'boolean') {
+                        const n = String(newVal).toLowerCase() === 'true';
+                        const o = Boolean(oldVal);
+                        if (n !== o) isDiff = true;
+                    } else {
+                        if (String(newVal).trim() !== String(oldVal || '').trim()) isDiff = true;
+                    }
+
+                    if (isDiff) {
+                        status = 'UPDATE';
+                        changes.push({ field: label, old: oldVal, new: newVal, type });
+                    }
+                };
+
+                check('purchase_price', 'Price', 'currency');
+                check('case_price', 'Case Price', 'currency');
+                check('supplier', 'Supplier');
+                check('category', 'Category');
+                check('bottle_image_url', 'Image');
+                check('tier', 'Tier');
+                check('exclusive', 'Exclusive', 'boolean');
+            }
+
+            if (status === 'NEW') stats.new++;
+            else if (status === 'UPDATE') stats.updated++;
+            else stats.unchanged++;
+
+            report.push({ ...row, status, changes });
+        }
+
+        return new Response(
+            JSON.stringify({ report, stats }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+    }
+
+    // --- IMPORT MODE (ACTUAL SAVE) ---
+    // 1. Upsert Ingredients
+    const { data: existingIngs } = await supabaseClient.from('ingredients').select('id, name');
+    const ingredientMap = new Map();
+    if (existingIngs) existingIngs.forEach((i: any) => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
 
     const newIngredients = [];
     for (const row of rows) {
-        const name = row.name.trim();
-        const key = name.toLowerCase();
-        
+        const key = row.name.toLowerCase().trim();
         if (!ingredientMap.has(key)) {
-             // Create new ingredient object
-             // NOTE: RLS will automatically attach user_id/org_id if your policies are set up correctly
              newIngredients.push({
-                 name: name,
+                 name: row.name,
                  supplier: row.supplier,
                  category: row.category,
                  spirit_type: row.spirit_type,
-                 style: row.style, 
-                 substyle: row.substyle,
-                 flavor: row.flavor, 
-                 region: row.region, 
-                 description: row.description,
+                 style: row.style, substyle: row.substyle,
+                 flavor: row.flavor, region: row.region, description: row.description,
                  abv: parseFloat(row.abv) || 0,
-                 unit: 'oz' // Default
+                 unit: 'oz'
              });
-             // Add dummy placeholder so we don't add duplicate names in this batch
              ingredientMap.set(key, 'PENDING');
         }
     }
 
-    // B. Insert New Ingredients
     if (newIngredients.length > 0) {
-        const { data: created, error: createError } = await supabaseClient
+        const { data: created, error } = await supabaseClient
             .from('ingredients')
-            .upsert(newIngredients, { onConflict: 'name', ignoreDuplicates: false })
+            .upsert(newIngredients, { onConflict: 'name' })
             .select('id, name');
-            
-        if (createError) throw new Error("Ingredient Insert Error: " + createError.message);
-        
-        // Update Map with real IDs
-        created.forEach(i => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
+        if (error) throw new Error("Ingredient Save Failed: " + error.message);
+        created.forEach((i: any) => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
     }
 
-    // 4. Upsert Variants
-    const variantsToUpsert = [];
+    // 2. Upsert Variants
+    const variants = [];
     for (const row of rows) {
         const ingId = ingredientMap.get(row.name.toLowerCase().trim());
-        if (!ingId || ingId === 'PENDING') continue; // Skip if failed
+        if (!ingId || ingId === 'PENDING') continue;
 
-        variantsToUpsert.push({
+        variants.push({
             ingredient_id: ingId,
             sku_number: row.sku_number,
             purchase_price: parseFloat(row.purchase_price) || 0,
             case_price: parseFloat(row.case_price) || 0,
             bottles_per_case: parseFloat(row.bottles_per_case) || 1,
-            size_ml: parseFloat(row.size_ml) || 750, // Frontend handles parsing
+            size_ml: parseFloat(row.variant_size) || 750,
             purchase_quantity: parseFloat(row.purchase_quantity) || 1,
             purchase_unit: row.purchase_unit,
             tier: row.tier,
-            exclusive: row.exclusive === true || String(row.exclusive).toLowerCase() === 'true',
+            exclusive: String(row.exclusive).toLowerCase() === 'true',
             bottle_image_url: row.bottle_image_url
         });
     }
 
-    // C. Bulk Upsert Variants
-    if (variantsToUpsert.length > 0) {
-        const { error: varError } = await supabaseClient
+    if (variants.length > 0) {
+        const { error } = await supabaseClient
             .from('product_variants')
-            .upsert(variantsToUpsert, { onConflict: 'sku_number' });
-            
-        if (varError) throw new Error("Variant Upsert Error: " + varError.message);
+            .upsert(variants, { onConflict: 'sku_number' });
+        if (error) throw new Error("Variant Save Failed: " + error.message);
     }
 
     return new Response(
-      JSON.stringify({ success: true, count: variantsToUpsert.length }),
+      JSON.stringify({ success: true, count: variants.length }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 
