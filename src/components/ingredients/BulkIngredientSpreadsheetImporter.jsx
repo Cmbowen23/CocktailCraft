@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ImageIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
 // --- ROBUST PARSER ---
@@ -72,12 +72,13 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 1. Fetch Existing Data for "Diff" View
+  // 1. Fetch Existing Data for Deep Comparison
   useEffect(() => {
     const fetchExisting = async () => {
+      // Fetch all fields we want to check for updates
       const { data, error } = await supabase
         .from('product_variants')
-        .select('sku_number, purchase_price');
+        .select('sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive');
       
       if (!error && data) {
         const map = new Map();
@@ -129,7 +130,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     }
   };
 
-  // 3. Transform Data into Hierarchy
+  // 3. Transform Data & Detect Changes
   const groupedData = useMemo(() => {
     const groups = {};
 
@@ -152,28 +153,61 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
         };
       }
 
-      // Check Diff Logic
+      // --- DIFF LOGIC ---
       const sku = newRow.sku_number;
       let changeType = 'NEW'; 
-      let priceChange = null;
+      const changes = [];
 
       if (sku && existingSkus.has(sku)) {
         const existing = existingSkus.get(sku);
-        const newPrice = parseFloat(newRow.purchase_price);
-        
-        // Strict price comparison
-        if (!isNaN(newPrice) && Math.abs(existing.purchase_price - newPrice) > 0.01) {
-          changeType = 'UPDATE';
-          priceChange = { old: existing.purchase_price, new: newPrice };
-        } else {
-          changeType = 'SAME';
-        }
+        changeType = 'SAME';
+
+        // Helper to compare fields
+        const checkChange = (field, label, isCurrency = false) => {
+            const newVal = newRow[field];
+            const oldVal = existing[field];
+            
+            // Skip if new value is empty/undefined
+            if (newVal === undefined || newVal === '') return;
+
+            let isDifferent = false;
+            
+            if (isCurrency) {
+                const n = parseFloat(newVal);
+                const o = parseFloat(oldVal);
+                if (!isNaN(n) && Math.abs(n - (o || 0)) > 0.01) isDifferent = true;
+            } else if (field === 'exclusive') {
+                const n = String(newVal).toLowerCase() === 'true';
+                const o = Boolean(oldVal);
+                if (n !== o) isDifferent = true;
+            } else {
+                // String comparison
+                if (String(newVal).trim() !== String(oldVal || '').trim()) isDifferent = true;
+            }
+
+            if (isDifferent) {
+                changeType = 'UPDATE';
+                changes.push({
+                    field: label,
+                    old: oldVal,
+                    new: newVal,
+                    isCurrency,
+                    isImage: field === 'bottle_image_url'
+                });
+            }
+        };
+
+        checkChange('purchase_price', 'Price', true);
+        checkChange('case_price', 'Case Price', true);
+        checkChange('bottle_image_url', 'Image');
+        checkChange('tier', 'Tier');
+        checkChange('exclusive', 'Exclusive');
       }
 
       groups[nameKey].variants.push({
         ...newRow,
         changeType,
-        priceChange
+        changes
       });
     });
 
@@ -228,7 +262,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     <Card className="max-w-md mx-auto mt-10 bg-emerald-50 border-emerald-100 p-8 text-center shadow-sm">
         <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto mb-4" />
         <h3 className="text-xl font-bold text-emerald-900">Import Complete</h3>
-        <p className="text-emerald-700 mt-2">Inventory updated successfully.</p>
+        <p className="text-emerald-700 mt-2">Your inventory has been updated.</p>
     </Card>
   );
 
@@ -331,7 +365,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                         <CheckCircle2 className="w-4 h-4"/> Ready to Import
                     </h4>
                     <p className="text-sm text-blue-700 mt-1">
-                        Found <strong>{groupedData.length}</strong> unique ingredients. Review changes below before saving.
+                        Found <strong>{groupedData.length}</strong> unique ingredients.
                     </p>
                 </div>
                 <Button onClick={handleImport} className="bg-emerald-600 hover:bg-emerald-700 px-8 h-16 text-lg shadow-lg">
@@ -339,16 +373,15 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                 </Button>
             </div>
 
-            {/* SCROLLABLE TABLE AREA */}
             <div className="border rounded-md bg-white shadow-sm flex flex-col h-[500px]">
                 <div className="flex-1 overflow-y-auto">
                     <Table>
                         <TableHeader className="bg-gray-100 sticky top-0 z-10 shadow-sm">
                             <TableRow>
-                                <TableHead className="w-[40%] pl-4">Ingredient / Size</TableHead>
-                                <TableHead className="w-[20%]">SKU</TableHead>
-                                <TableHead className="w-[15%]">Status</TableHead>
-                                <TableHead className="w-[25%] text-right pr-6">Changes / Price</TableHead>
+                                <TableHead className="w-[35%] pl-4">Ingredient / Size</TableHead>
+                                <TableHead className="w-[15%]">SKU</TableHead>
+                                <TableHead className="w-[10%]">Status</TableHead>
+                                <TableHead className="w-[40%]">Updates Detected</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -384,15 +417,32 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                                                 {v.changeType === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100">Update</Badge>}
                                                 {v.changeType === 'SAME' && <span className="text-xs text-gray-400">Unchanged</span>}
                                             </TableCell>
-                                            <TableCell className="text-right pr-6 font-mono text-sm">
-                                                {v.priceChange ? (
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        <span className="text-gray-400 line-through">{formatCurrency(v.priceChange.old)}</span>
-                                                        <ArrowRight className="w-3 h-3 text-gray-400"/>
-                                                        <span className="text-orange-600 font-bold">{formatCurrency(v.priceChange.new)}</span>
+                                            <TableCell className="text-sm">
+                                                {v.changes.length > 0 ? (
+                                                    <div className="space-y-1">
+                                                        {v.changes.map((c, cIdx) => (
+                                                            <div key={cIdx} className="flex items-center gap-2 text-xs">
+                                                                <span className="font-medium text-gray-700 w-16">{c.field}:</span>
+                                                                {c.isImage ? (
+                                                                    <span className="text-blue-600 flex items-center gap-1">
+                                                                        <ImageIcon className="w-3 h-3"/> Image Updated
+                                                                    </span>
+                                                                ) : (
+                                                                    <div className="flex items-center gap-1">
+                                                                        <span className="text-gray-400 line-through">
+                                                                            {c.isCurrency ? formatCurrency(c.old) : (c.old || 'Empty')}
+                                                                        </span>
+                                                                        <ArrowRight className="w-3 h-3 text-gray-400"/>
+                                                                        <span className="text-orange-600 font-bold">
+                                                                            {c.isCurrency ? formatCurrency(c.new) : c.new}
+                                                                        </span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        ))}
                                                     </div>
                                                 ) : (
-                                                    <span>{formatCurrency(v.purchase_price)}</span>
+                                                    <span className="text-gray-300 text-xs">-</span>
                                                 )}
                                             </TableCell>
                                         </TableRow>
