@@ -37,6 +37,40 @@ const TABLE_NAME_MAP = {
 
 const BATCH_SIZE = 1000
 
+// Fields that should be auto-parsed from JSON strings to arrays/objects
+const JSON_FIELDS_BY_TABLE = {
+  ingredients: ['prep_actions', 'custom_conversions', 'aliases'],
+  recipes: ['ingredients', 'steps'],
+  // Add other tables as needed
+}
+
+// Auto-parse JSON fields (mimics Base44 SDK behavior)
+function parseJsonFields(data, tableName) {
+  if (!data) return data
+
+  const fieldsToparse = JSON_FIELDS_BY_TABLE[tableName] || []
+  if (fieldsToparse.length === 0) return data
+
+  const parseItem = (item) => {
+    if (!item) return item
+
+    const parsed = { ...item }
+    fieldsToparse.forEach(field => {
+      if (parsed[field] && typeof parsed[field] === 'string') {
+        try {
+          parsed[field] = JSON.parse(parsed[field])
+        } catch (e) {
+          // If parsing fails, leave as-is
+        }
+      }
+    })
+    return parsed
+  }
+
+  // Handle both single items and arrays
+  return Array.isArray(data) ? data.map(parseItem) : parseItem(data)
+}
+
 function createEntityMethods(tableName) {
   return {
     async list(orderBy = '-created_at', limit = 10000) {
@@ -69,7 +103,7 @@ function createEntityMethods(tableName) {
         }
       }
 
-      return allData
+      return parseJsonFields(allData, tableName)
     },
 
     async get(id) {
@@ -80,7 +114,7 @@ function createEntityMethods(tableName) {
         .maybeSingle()
 
       if (error) throw error
-      return data
+      return parseJsonFields(data, tableName)
     },
 
     async create(payload) {
@@ -91,7 +125,7 @@ function createEntityMethods(tableName) {
         .single()
 
       if (error) throw error
-      return data
+      return parseJsonFields(data, tableName)
     },
 
     async update(id, payload) {
@@ -103,7 +137,7 @@ function createEntityMethods(tableName) {
         .single()
 
       if (error) throw error
-      return data
+      return parseJsonFields(data, tableName)
     },
 
     async delete(id) {
@@ -146,7 +180,7 @@ function createEntityMethods(tableName) {
         }
       }
 
-      return allData
+      return parseJsonFields(allData, tableName)
     },
   }
 }
