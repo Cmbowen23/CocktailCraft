@@ -92,6 +92,8 @@ export default function DuplicateRecipeManager() {
       `;
 
       const result = await base44.raw(query);
+      console.log('Duplicate query result:', result);
+      console.log('Duplicate count:', result?.length || 0);
       setDuplicates(result || []);
     } catch (err) {
       console.error('Failed to load duplicates:', err);
@@ -124,6 +126,8 @@ export default function DuplicateRecipeManager() {
       `;
 
       const result = await base44.raw(query);
+      console.log('Empty recipes query result:', result);
+      console.log('Empty recipe count:', result?.length || 0);
       setEmptyRecipes(result || []);
     } catch (err) {
       console.error('Failed to load empty recipes:', err);
