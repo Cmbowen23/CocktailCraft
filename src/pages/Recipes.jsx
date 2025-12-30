@@ -19,7 +19,8 @@ import {
   BookOpen,
   Copy,
   Loader2,
-  Trash2
+  Trash2,
+  GitMerge
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -27,6 +28,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import CocktailLoader from "@/components/ui/CocktailLoader";
@@ -208,13 +210,21 @@ export default function RecipesPage() {
 
       // CRITICAL: Parse JSON fields first, then enrich recipes with ingredient_id and prep_action_id
       const parsedRecipes = (recipesData || []).map(recipe => parseRecipeData(recipe));
-      const enrichedRecipes = parsedRecipes.map(recipe => enrichRecipeWithIds(recipe, ingredientsData || []));
+
+      // Filter out recipes with no ingredients for better performance
+      const validRecipes = parsedRecipes.filter(recipe =>
+        recipe.ingredients &&
+        Array.isArray(recipe.ingredients) &&
+        recipe.ingredients.length > 0
+      );
+
+      const enrichedRecipes = validRecipes.map(recipe => enrichRecipeWithIds(recipe, ingredientsData || []));
       setRecipes(enrichedRecipes);
       
       await new Promise(r => setTimeout(r, 50));
       
-      // 4. Variants
-      const variantsData = await base44.entities.ProductVariant.list("-created_at", 5000).catch(err => {
+      // 4. Variants (reduced limit for faster loading)
+      const variantsData = await base44.entities.ProductVariant.list("-created_at", 1000).catch(err => {
         console.error("Error loading variants:", err);
         return [];
       });
@@ -539,6 +549,11 @@ export default function RecipesPage() {
                     <DropdownMenuItem onClick={() => window.location.href = createPageUrl('CreateSubRecipe')}>
                       <FlaskConical className="w-4 h-4 mr-2" />
                       New Sub-Recipe
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => window.location.href = createPageUrl('duplicate-recipe-manager')}>
+                      <GitMerge className="w-4 h-4 mr-2" />
+                      Manage Duplicates
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
