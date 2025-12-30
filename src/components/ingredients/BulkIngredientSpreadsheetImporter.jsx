@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ChevronDown } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
 // --- ROBUST PARSER ---
@@ -57,12 +57,17 @@ const FIELD_CONFIG = [
   { key: 'bottle_image_url', label: 'Image URL', aliases: ['bottle_image_url', 'image'] },
 ];
 
+const formatCurrency = (val) => {
+  const num = parseFloat(val);
+  return isNaN(num) ? '-' : `$${num.toFixed(2)}`;
+};
+
 export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel }) {
   const [step, setStep] = useState('upload'); 
   const [rawHeaders, setRawHeaders] = useState([]);
   const [rawRows, setRawRows] = useState([]);
   const [mapping, setMapping] = useState({});
-  const [existingSkus, setExistingSkus] = useState(new Map()); // Cache for Diffing
+  const [existingSkus, setExistingSkus] = useState(new Map()); 
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
@@ -70,10 +75,9 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   // 1. Fetch Existing Data for "Diff" View
   useEffect(() => {
     const fetchExisting = async () => {
-      // Get all variants to check for price changes
       const { data, error } = await supabase
         .from('product_variants')
-        .select('sku_number, purchase_price, size_ml');
+        .select('sku_number, purchase_price');
       
       if (!error && data) {
         const map = new Map();
@@ -107,7 +111,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
       }
       setRawRows(rows);
 
-      // Auto-Mapping
       const newMap = {};
       FIELD_CONFIG.forEach(field => {
         let match = headers.find(h => h === field.key);
@@ -126,7 +129,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     }
   };
 
-  // 3. Transform Data into Hierarchy (Ingredient -> Variants)
+  // 3. Transform Data into Hierarchy
   const groupedData = useMemo(() => {
     const groups = {};
 
@@ -151,14 +154,15 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
 
       // Check Diff Logic
       const sku = newRow.sku_number;
-      let changeType = 'NEW'; // NEW, UPDATE, SAME
+      let changeType = 'NEW'; 
       let priceChange = null;
 
       if (sku && existingSkus.has(sku)) {
         const existing = existingSkus.get(sku);
         const newPrice = parseFloat(newRow.purchase_price);
         
-        if (existing.purchase_price !== newPrice && !isNaN(newPrice)) {
+        // Strict price comparison
+        if (!isNaN(newPrice) && Math.abs(existing.purchase_price - newPrice) > 0.01) {
           changeType = 'UPDATE';
           priceChange = { old: existing.purchase_price, new: newPrice };
         } else {
@@ -183,7 +187,6 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
     setStatus('Initializing import...');
 
     try {
-      // Flatten back to rows for API
       const flatRows = [];
       groupedData.forEach(group => {
          group.variants.forEach(v => {
@@ -230,7 +233,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
   );
 
   return (
-    <Card className="max-w-5xl mx-auto mt-6 shadow-md border-gray-200">
+    <Card className="max-w-6xl mx-auto mt-6 shadow-md border-gray-200">
       <CardHeader className="border-b bg-gray-50/50 pb-4">
         <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
@@ -319,7 +322,7 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
           </div>
         )}
 
-        {/* STEP 3: HIERARCHICAL AUDIT (Item -> Nested Variations) */}
+        {/* STEP 3: AUDIT */}
         {step === 'audit' && (
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
@@ -336,69 +339,72 @@ export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel
                 </Button>
             </div>
 
-            <div className="border rounded-md overflow-hidden mb-6 h-[500px] overflow-auto relative bg-white">
-                <Table>
-                    <TableHeader className="bg-gray-100 sticky top-0 z-10 shadow-sm">
-                        <TableRow>
-                            <TableHead className="w-[40%] pl-4">Ingredient / Size</TableHead>
-                            <TableHead className="w-[20%]">SKU</TableHead>
-                            <TableHead className="w-[15%]">Status</TableHead>
-                            <TableHead className="w-[25%] text-right pr-6">Changes / Price</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {groupedData.map((group, i) => (
-                            <React.Fragment key={i}>
-                                {/* PARENT ROW: INGREDIENT */}
-                                <TableRow className="bg-gray-50 border-t border-gray-200">
-                                    <TableCell className="font-bold text-gray-800 py-3 pl-4 flex items-center gap-2">
-                                        <ChevronDown className="w-4 h-4 text-gray-400"/>
-                                        {group.name}
-                                        <span className="text-xs font-normal text-gray-500 bg-white px-2 py-0.5 rounded border ml-2">
-                                            {group.category}
-                                        </span>
-                                    </TableCell>
-                                    <TableCell colSpan={3} className="text-xs text-gray-400 text-right pr-6 italic">
-                                        {group.variants.length} variant{group.variants.length !== 1 ? 's' : ''}
-                                    </TableCell>
-                                </TableRow>
-
-                                {/* CHILD ROWS: VARIANTS */}
-                                {group.variants.map((v, idx) => (
-                                    <TableRow key={`${i}-${idx}`} className="hover:bg-blue-50/50">
-                                        <TableCell className="pl-12 text-sm text-gray-600 border-l-4 border-transparent hover:border-blue-400">
-                                            {v.variant_size || '750ml'} 
-                                            <span className="text-gray-400 mx-2">•</span> 
-                                            {v.supplier || 'No Supplier'}
+            {/* SCROLLABLE TABLE AREA */}
+            <div className="border rounded-md bg-white shadow-sm flex flex-col h-[500px]">
+                <div className="flex-1 overflow-y-auto">
+                    <Table>
+                        <TableHeader className="bg-gray-100 sticky top-0 z-10 shadow-sm">
+                            <TableRow>
+                                <TableHead className="w-[40%] pl-4">Ingredient / Size</TableHead>
+                                <TableHead className="w-[20%]">SKU</TableHead>
+                                <TableHead className="w-[15%]">Status</TableHead>
+                                <TableHead className="w-[25%] text-right pr-6">Changes / Price</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {groupedData.map((group, i) => (
+                                <React.Fragment key={i}>
+                                    {/* PARENT ROW */}
+                                    <TableRow className="bg-gray-50 border-t border-gray-200">
+                                        <TableCell className="font-bold text-gray-800 py-3 pl-4 flex items-center gap-2">
+                                            <ChevronDown className="w-4 h-4 text-gray-400"/>
+                                            {group.name}
+                                            <Badge variant="outline" className="bg-white text-gray-500 font-normal ml-2">
+                                                {group.category}
+                                            </Badge>
                                         </TableCell>
-                                        <TableCell className="font-mono text-xs text-gray-500">
-                                            {v.sku_number || '-'}
-                                        </TableCell>
-                                        <TableCell>
-                                            {v.changeType === 'NEW' && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">New</Badge>}
-                                            {v.changeType === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100">Update</Badge>}
-                                            {v.changeType === 'SAME' && <span className="text-xs text-gray-400">Unchanged</span>}
-                                        </TableCell>
-                                        <TableCell className="text-right pr-6 font-mono text-sm">
-                                            {v.priceChange ? (
-                                                <div className="flex items-center justify-end gap-2">
-                                                    <span className="text-gray-400 line-through">${v.priceChange.old}</span>
-                                                    <ArrowRight className="w-3 h-3 text-gray-400"/>
-                                                    <span className="text-orange-600 font-bold">${v.priceChange.new}</span>
-                                                </div>
-                                            ) : (
-                                                <span>${v.purchase_price || '0.00'}</span>
-                                            )}
+                                        <TableCell colSpan={3} className="text-xs text-gray-400 text-right pr-6 italic">
+                                            {group.variants.length} variant{group.variants.length !== 1 ? 's' : ''}
                                         </TableCell>
                                     </TableRow>
-                                ))}
-                            </React.Fragment>
-                        ))}
-                    </TableBody>
-                </Table>
+
+                                    {/* CHILD ROWS */}
+                                    {group.variants.map((v, idx) => (
+                                        <TableRow key={`${i}-${idx}`} className="hover:bg-blue-50/50">
+                                            <TableCell className="pl-12 text-sm text-gray-600 border-l-4 border-transparent hover:border-blue-400">
+                                                {v.variant_size || '750ml'} 
+                                                <span className="text-gray-400 mx-2">•</span> 
+                                                {v.supplier || 'No Supplier'}
+                                            </TableCell>
+                                            <TableCell className="font-mono text-xs text-gray-500">
+                                                {v.sku_number || '-'}
+                                            </TableCell>
+                                            <TableCell>
+                                                {v.changeType === 'NEW' && <Badge className="bg-green-100 text-green-700 border-green-200 hover:bg-green-100">New</Badge>}
+                                                {v.changeType === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100">Update</Badge>}
+                                                {v.changeType === 'SAME' && <span className="text-xs text-gray-400">Unchanged</span>}
+                                            </TableCell>
+                                            <TableCell className="text-right pr-6 font-mono text-sm">
+                                                {v.priceChange ? (
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="text-gray-400 line-through">{formatCurrency(v.priceChange.old)}</span>
+                                                        <ArrowRight className="w-3 h-3 text-gray-400"/>
+                                                        <span className="text-orange-600 font-bold">{formatCurrency(v.priceChange.new)}</span>
+                                                    </div>
+                                                ) : (
+                                                    <span>{formatCurrency(v.purchase_price)}</span>
+                                                )}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </React.Fragment>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
             </div>
             
-            <div className="flex justify-start">
+            <div className="flex justify-start mt-4">
                <Button variant="ghost" onClick={() => setStep('map')} className="text-gray-500">← Back to Mapping</Button>
             </div>
           </div>
