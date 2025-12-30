@@ -405,10 +405,34 @@ export default function DuplicateRecipeManager() {
               Manage duplicate and empty recipes
             </p>
           </div>
-          <Button onClick={() => { loadDuplicates(); loadEmptyRecipes(); }} variant="outline" disabled={isLoading}>
-            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
-            Refresh
-          </Button>
+          <div className="flex gap-3">
+            <Button onClick={() => { loadDuplicates(); loadEmptyRecipes(); }} variant="outline" disabled={isLoading}>
+              {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+              Refresh
+            </Button>
+            {duplicates.length > 0 && (
+              <Button
+                onClick={bulkCleanupAllDuplicates}
+                variant="default"
+                size="default"
+                className="bg-green-600 hover:bg-green-700"
+                disabled={isLoading}
+              >
+                <GitMerge className="w-4 h-4 mr-2" />
+                Clean All Duplicates Now
+              </Button>
+            )}
+            {emptyRecipes.length > 0 && (
+              <Button
+                onClick={bulkDeleteEmptyRecipes}
+                variant="destructive"
+                disabled={isLoading}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete All Empty Recipes
+              </Button>
+            )}
+          </div>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
