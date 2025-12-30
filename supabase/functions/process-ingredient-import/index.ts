@@ -13,32 +13,40 @@ serve(async (req) => {
   try {
     const { rows, dry_run } = await req.json()
     
-    // 1. Initialize Supabase with the USER'S context (Secure & Scalable)
+    // 1. Init Client with User Context
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
     )
 
+    // 2. OPTIMIZATION: Extract Keys for Filtering
+    // Instead of loading the whole DB, we only look for the items in this batch.
+    const batchSkus = rows.map((r: any) => String(r.sku_number || '').trim()).filter((s: string) => s.length > 0);
+    const batchNames = rows.map((r: any) => r.name?.trim()).filter((n: string) => n && n.length > 0);
+
     // --- AUDIT MODE (DRY RUN) ---
-    // Compares CSV rows against DB without saving
     if (dry_run) {
-        // Fetch all existing SKUs for comparison
-        const { data: allVariants, error } = await supabaseClient
-            .from('product_variants')
-            .select(`
-                sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive, 
-                bottles_per_case, purchase_quantity, purchase_unit,
-                ingredient:ingredient_id ( name, supplier, category )
-            `);
+        // A. Fetch only RELEVANT existing variants
+        let existingVariants = [];
+        if (batchSkus.length > 0) {
+            const { data, error } = await supabaseClient
+                .from('product_variants')
+                .select(`
+                    sku_number, purchase_price, case_price, bottle_image_url, tier, exclusive, 
+                    bottles_per_case, purchase_quantity, purchase_unit,
+                    ingredient:ingredient_id ( name, supplier, category )
+                `)
+                .in('sku_number', batchSkus); // <--- CRITICAL OPTIMIZATION
+            
+            if (error) throw new Error("Fetch Failed: " + error.message);
+            existingVariants = data || [];
+        }
 
-        if (error) throw new Error("Inventory Load Failed: " + error.message);
-
-        // Create fast lookup map
+        // Map for lookup
         const inventoryMap = new Map();
-        allVariants.forEach((v: any) => {
+        existingVariants.forEach((v: any) => {
             if (v.sku_number) {
-                // Flatten ingredient data for easier diffing
                 const flat = { ...v, ...(v.ingredient || {}) };
                 delete flat.ingredient;
                 inventoryMap.set(String(v.sku_number).trim().toLowerCase(), flat);
@@ -60,7 +68,7 @@ serve(async (req) => {
             if (existing) {
                 status = 'SAME';
 
-                // Helper to detect changes
+                // Comparison Logic
                 const check = (field: string, label: string, type = 'string') => {
                     let newVal = row[field];
                     let oldVal = existing[field];
@@ -68,7 +76,6 @@ serve(async (req) => {
                     if (newVal === undefined || newVal === '') return; 
 
                     let isDiff = false;
-
                     if (type === 'currency' || type === 'number') {
                         const n = parseFloat(String(newVal).replace(/[^0-9.-]/g, ''));
                         const o = parseFloat(String(oldVal).replace(/[^0-9.-]/g, ''));
@@ -111,10 +118,16 @@ serve(async (req) => {
     }
 
     // --- IMPORT MODE (ACTUAL SAVE) ---
-    // 1. Upsert Ingredients
-    const { data: existingIngs } = await supabaseClient.from('ingredients').select('id, name');
+    
+    // 1. Resolve Ingredients (Fetch only relevant ones)
     const ingredientMap = new Map();
-    if (existingIngs) existingIngs.forEach((i: any) => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
+    if (batchNames.length > 0) {
+        const { data } = await supabaseClient
+            .from('ingredients')
+            .select('id, name')
+            .in('name', batchNames); // <--- OPTIMIZATION
+        if (data) data.forEach((i: any) => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
+    }
 
     const newIngredients = [];
     for (const row of rows) {
@@ -134,12 +147,14 @@ serve(async (req) => {
         }
     }
 
+    // Bulk Insert New Ingredients
     if (newIngredients.length > 0) {
         const { data: created, error } = await supabaseClient
             .from('ingredients')
             .upsert(newIngredients, { onConflict: 'name' })
             .select('id, name');
-        if (error) throw new Error("Ingredient Save Failed: " + error.message);
+        
+        if (error) throw new Error("Ing Save Failed: " + error.message);
         created.forEach((i: any) => ingredientMap.set(i.name.toLowerCase().trim(), i.id));
     }
 
@@ -168,6 +183,7 @@ serve(async (req) => {
         const { error } = await supabaseClient
             .from('product_variants')
             .upsert(variants, { onConflict: 'sku_number' });
+        
         if (error) throw new Error("Variant Save Failed: " + error.message);
     }
 
