@@ -1,337 +1,350 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, AlertCircle, FileSpreadsheet, ArrowRight, Save, ImageIcon } from "lucide-react";
+import { Upload, X, Loader2, AlertTriangle, Download, FileSpreadsheet, AlertCircle, CheckCircle2, ArrowRight, Save } from "lucide-react";
 import { supabase } from "@/lib/supabase"; 
 
-const parseCSVLine = (text) => {
-  const result = [];
-  let curValue = '';
-  let inQuote = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (inQuote) {
-      if (char === '"') {
-        if (i + 1 < text.length && text[i + 1] === '"') { curValue += '"'; i++; } 
-        else { inQuote = false; }
-      } else { curValue += char; }
-    } else {
-      if (char === '"') { inQuote = true; } 
-      else if (char === ',') { result.push(curValue.trim()); curValue = ''; } 
-      else { curValue += char; }
-    }
-  }
-  result.push(curValue.trim());
-  return result;
+// --- HELPER FUNCTIONS (Ported from Base44) ---
+const normalizeName = (name) => (name || '').toLowerCase().trim().replace(/\s+/g, ' ');
+
+const calculateSimilarity = (str1, str2) => {
+  const s1 = str1.toLowerCase().trim();
+  const s2 = str2.toLowerCase().trim();
+  if (s1 === s2) return 1;
+  if (s1.includes(s2) || s2.includes(s1)) return 0.8;
+  return 0;
 };
 
-const FIELD_CONFIG = [
-  { key: 'name', label: 'Name', required: true, aliases: ['name', 'product name'] },
-  { key: 'category', label: 'Category', aliases: ['category', 'type'] },
-  { key: 'supplier', label: 'Supplier', aliases: ['supplier', 'vendor'] },
-  { key: 'sku_number', label: 'SKU', aliases: ['sku', 'sku_number', 'id'] },
-  { key: 'purchase_price', label: 'Price ($)', aliases: ['purchase_price', 'cost', 'unit cost'] },
-  { key: 'case_price', label: 'Case Price ($)', aliases: ['case_price', 'case cost'] },
-  { key: 'variant_size', label: 'Size', aliases: ['variant_size', 'size', 'volume'] },
-  { key: 'style', label: 'Style', aliases: ['style'] },
-  { key: 'substyle', label: 'Sub-Style', aliases: ['substyle'] },
-  { key: 'flavor', label: 'Flavor', aliases: ['flavor'] },
-  { key: 'region', label: 'Region', aliases: ['region'] },
-  { key: 'abv', label: 'ABV (%)', aliases: ['abv'] },
-  { key: 'tier', label: 'Tier', aliases: ['tier'] },
-  { key: 'exclusive', label: 'Exclusive?', aliases: ['exclusive'] },
-  { key: 'bottle_image_url', label: 'Image URL', aliases: ['bottle_image_url', 'image'] },
-];
+// --- MAIN COMPONENT ---
+export default function BulkIngredientSpreadsheetImporter({ onComplete, onCancel }) {
+  const [step, setStep] = useState('upload');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [parsedRows, setParsedRows] = useState([]);
+  const [parsedHeaders, setParsedHeaders] = useState([]);
+  const [columnMappings, setColumnMappings] = useState({});
+  
+  // Data State
+  const [allIngredients, setAllIngredients] = useState([]);
+  const [allProductVariants, setAllProductVariants] = useState([]);
+  const [parsedIngredients, setParsedIngredients] = useState([]); // The grouped data
+  const [mergeDecisions, setMergeDecisions] = useState({});
+  
+  const [progress, setProgress] = useState('');
+  const [error, setError] = useState('');
 
-const formatCurrency = (val) => {
-  const num = parseFloat(String(val).replace(/[^0-9.-]+/g,""));
-  return isNaN(num) ? '-' : `$${num.toFixed(2)}`;
-};
+  // 1. Fetch Existing Data on Mount (The "Base44 Way")
+  useEffect(() => {
+    const fetchAllData = async () => {
+        setIsProcessing(true);
+        setProgress('Loading current inventory...');
+        
+        try {
+            // Fetch Ingredients
+            let { data: ings } = await supabase.from('ingredients').select('*');
+            setAllIngredients(ings || []);
 
-export default function BulkIngredientSpreadsheetImporter({ onComplete }) {
-  const [step, setStep] = useState('upload'); 
-  const [rawRows, setRawRows] = useState([]);
-  const [rawHeaders, setRawHeaders] = useState([]);
-  const [mapping, setMapping] = useState({});
-  const [reportData, setReportData] = useState([]); 
-  const [stats, setStats] = useState({ new: 0, updated: 0, unchanged: 0 });
-  const [status, setStatus] = useState('');
-  const [progress, setProgress] = useState(0);
-  const [errorMsg, setErrorMsg] = useState('');
+            // Fetch Variants (Loop to get all 3000+)
+            let allVars = [];
+            let from = 0; 
+            const size = 1000;
+            let more = true;
+            while(more) {
+                const { data } = await supabase.from('product_variants').select('*').range(from, from + size - 1);
+                if (data && data.length > 0) {
+                    allVars = [...allVars, ...data];
+                    from += size;
+                    if (data.length < size) more = false;
+                } else {
+                    more = false;
+                }
+            }
+            setAllProductVariants(allVars);
+        } catch (err) {
+            console.error(err);
+            setError("Failed to load inventory.");
+        } finally {
+            setIsProcessing(false);
+            setProgress('');
+        }
+    };
+    fetchAllData();
+  }, []);
 
-  // 1. File Upload
-  const handleFileSelect = async (e) => {
+  // 2. File Handler
+  const handleFileUpload = (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-      const headers = parseCSVLine(lines[0]);
-      setRawHeaders(headers);
-
-      const rows = [];
-      for (let i = 1; i < lines.length; i++) {
-          const values = parseCSVLine(lines[i]);
-          const rowObj = {};
-          headers.forEach((h, idx) => rowObj[h] = values[idx] || '');
-          if (Object.values(rowObj).some(v => v)) rows.push(rowObj);
-      }
-      setRawRows(rows);
-
-      // Auto Map
-      const newMap = {};
-      FIELD_CONFIG.forEach(field => {
-        let match = headers.find(h => h === field.key);
-        if (!match) match = headers.find(h => field.aliases.includes(h.toLowerCase()));
-        if (!match && !['purchase_price', 'case_price'].includes(field.key)) {
-             match = headers.find(h => h.toLowerCase().includes(field.label.toLowerCase()));
-        }
-        if (match) newMap[field.key] = match;
-      });
-      setMapping(newMap);
-      setStep('map');
-      setErrorMsg('');
-    } catch (err) { setErrorMsg("Error parsing CSV: " + err.message); }
+    if (file) setSelectedFile(file);
   };
 
-  // 2. BATCHED Audit (The Fix for Scalability)
-  const handleGenerateReport = async () => {
-    setStep('processing');
-    setProgress(0);
-    setStatus('Analyzing changes...');
+  const handleParseFile = async () => {
+    if (!selectedFile) return;
+    setIsProcessing(true);
     
-    const cleanRows = rawRows.map(row => {
-        const newRow = {};
-        Object.entries(mapping).forEach(([dbKey, csvHeader]) => {
-            if (csvHeader) newRow[dbKey] = row[csvHeader];
+    try {
+        const text = await selectedFile.text();
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+        
+        setParsedHeaders(headers);
+
+        // Simple CSV Parser
+        const rows = [];
+        for(let i=1; i<lines.length; i++) {
+            // Regex to handle quoted commas "Like, This"
+            const matches = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+            const row = {};
+            headers.forEach((h, idx) => {
+                let val = matches[idx] || '';
+                val = val.replace(/^"|"$/g, '').replace(/""/g, '"').trim();
+                row[h] = val;
+            });
+            rows.push(row);
+        }
+        setParsedRows(rows);
+
+        // Auto-Map
+        const initialMap = {};
+        const expected = ['name','category','supplier','sku_number','purchase_price','purchase_quantity','purchase_unit','case_price','bottles_per_case','exclusive','tier','abv','description'];
+        
+        expected.forEach(field => {
+            const match = headers.find(h => h.includes(field) || field.includes(h));
+            initialMap[field] = match || '';
         });
-        return newRow;
-    }).filter(r => r.name);
+        setColumnMappings(initialMap);
+        setStep('mapping');
 
-    try {
-        const BATCH_SIZE = 250; // Small batch size prevents timeouts
-        const total = cleanRows.length;
-        let allReports = [];
-        let accumulatedStats = { new: 0, updated: 0, unchanged: 0 };
-        let processedCount = 0;
-
-        for (let i = 0; i < total; i += BATCH_SIZE) {
-            const batch = cleanRows.slice(i, i + BATCH_SIZE);
-            setStatus(`Auditing items ${i+1} - ${Math.min(i+BATCH_SIZE, total)}...`);
-
-            const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
-                body: { rows: batch, dry_run: true }
-            });
-
-            if (error) throw error;
-            if (data.error) throw new Error(data.error);
-
-            allReports = [...allReports, ...data.report];
-            accumulatedStats.new += data.stats.new;
-            accumulatedStats.updated += data.stats.updated;
-            accumulatedStats.unchanged += data.stats.unchanged;
-            
-            processedCount += batch.length;
-            setProgress(Math.round((processedCount / total) * 100));
-        }
-
-        setReportData(allReports);
-        setStats(accumulatedStats);
-        setStep('audit');
     } catch (err) {
-        console.error(err);
-        setErrorMsg("Audit failed: " + err.message);
-        setStep('map');
+        setError("CSV Parse Error: " + err.message);
+    } finally {
+        setIsProcessing(false);
     }
   };
 
-  // 3. BATCHED Import
-  const handleImport = async () => {
-    setStep('processing');
-    setProgress(0);
-    setStatus('Saving to database...');
-    
-    try {
-        const rows = reportData; 
-        const BATCH_SIZE = 200;
-        let count = 0;
+  // 3. The "Heavy Lifting" Logic (Ported from Base44)
+  const handleConfirmMappings = async () => {
+    setIsProcessing(true);
+    setProgress('Analyzing...');
 
-        for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-            const batch = rows.slice(i, i + BATCH_SIZE);
-            setStatus(`Saving batch ${Math.floor(i/BATCH_SIZE)+1} of ${Math.ceil(rows.length/BATCH_SIZE)}...`);
-            
-            const { data, error } = await supabase.functions.invoke('process-ingredient-import', {
-                body: { rows: batch, dry_run: false }
+    try {
+        // Group by Name + Supplier
+        const groups = {};
+        parsedRows.forEach(row => {
+            const mapRow = {};
+            Object.entries(columnMappings).forEach(([key, col]) => {
+                if (col && row[col]) mapRow[key] = row[col];
             });
 
-            if (error) throw error;
-            if (data?.error) throw new Error(data.error);
-            
-            count += batch.length;
-            setProgress(Math.round((count / rows.length) * 100));
-        }
+            if (!mapRow.name) return;
 
-        setStatus('Complete!');
-        setStep('complete');
-        setTimeout(onComplete, 2000);
+            const key = `${mapRow.name.toLowerCase()}|${(mapRow.supplier||'').toLowerCase()}`;
+            if (!groups[key]) {
+                groups[key] = {
+                    name: mapRow.name,
+                    supplier: mapRow.supplier,
+                    category: mapRow.category || 'Spirit',
+                    // ... other ing fields
+                    variants: []
+                };
+            }
+
+            // Standardize Size
+            let size_ml = parseFloat(mapRow.purchase_quantity) || 750;
+            const unit = (mapRow.purchase_unit || 'ml').toLowerCase();
+            if (unit === 'l') size_ml *= 1000;
+            if (unit.includes('oz')) size_ml *= 29.57;
+
+            groups[key].variants.push({
+                sku_number: mapRow.sku_number,
+                purchase_price: parseFloat(mapRow.purchase_price) || 0,
+                case_price: parseFloat(mapRow.case_price) || 0,
+                size_ml: size_ml,
+                // ... other variant fields
+            });
+        });
+
+        // Compare against DB (Client Side)
+        const cleanedData = Object.values(groups).map(group => {
+            // Find Ingredient Match
+            const exactMatch = allIngredients.find(i => normalizeName(i.name) === normalizeName(group.name));
+            
+            const variantAnalysis = group.variants.map(v => {
+                let existingVar = null;
+                
+                // Find Variant Match by SKU or Size
+                if (exactMatch) {
+                    const existingVars = allProductVariants.filter(ev => ev.ingredient_id === exactMatch.id);
+                    if (v.sku_number) {
+                        existingVar = existingVars.find(ev => normalizeName(ev.sku_number) === normalizeName(v.sku_number));
+                    }
+                    if (!existingVar) {
+                        existingVar = existingVars.find(ev => Math.abs(ev.size_ml - v.size_ml) < 5);
+                    }
+                }
+
+                // Diff Check
+                const changes = [];
+                let isNew = true;
+
+                if (existingVar) {
+                    isNew = false;
+                    const check = (field, newVal, oldVal) => {
+                        if (newVal !== undefined && Math.abs(parseFloat(newVal) - parseFloat(oldVal || 0)) > 0.01) {
+                            changes.push({ field, oldValue: oldVal, newValue: newVal });
+                        }
+                    };
+                    check('purchase_price', v.purchase_price, existingVar.purchase_price);
+                    check('case_price', v.case_price, existingVar.case_price);
+                }
+
+                return { ...v, isNew, existingId: existingVar?.id, changes };
+            });
+
+            return { ...group, exactMatch, variantAnalysis };
+        });
+
+        setParsedIngredients(cleanedData);
+        setStep('confirm');
+
     } catch (err) {
-        setErrorMsg(err.message);
-        setStep('audit');
+        setError(err.message);
+    } finally {
+        setIsProcessing(false);
     }
   };
 
-  if (step === 'complete') return (
-    <Card className="max-w-md mx-auto mt-10 bg-emerald-50 border-emerald-100 p-8 text-center shadow-sm">
-        <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto mb-4" />
-        <h3 className="text-xl font-bold text-emerald-900">Import Successful</h3>
-        <p className="text-emerald-700 mt-2">Your inventory has been updated.</p>
+  // 4. Save (The Loop)
+  const handleSaveIngredients = async () => {
+    setIsProcessing(true);
+    let count = 0;
+
+    for (let i = 0; i < parsedIngredients.length; i++) {
+        const group = parsedIngredients[i];
+        
+        try {
+            // 1. Get/Create Ingredient ID
+            let ingId = group.exactMatch?.id;
+            if (!ingId) {
+                const { data: newIng } = await supabase.from('ingredients')
+                    .insert({ name: group.name, category: group.category, supplier: group.supplier })
+                    .select().single();
+                ingId = newIng.id;
+            }
+
+            // 2. Save Variants
+            for (const v of group.variantAnalysis) {
+                const payload = {
+                    ingredient_id: ingId,
+                    sku_number: v.sku_number,
+                    purchase_price: v.purchase_price,
+                    case_price: v.case_price,
+                    size_ml: v.size_ml
+                };
+
+                if (v.isNew) {
+                    await supabase.from('product_variants').insert(payload);
+                } else if (v.changes.length > 0) {
+                    await supabase.from('product_variants').update(payload).eq('id', v.existingId);
+                }
+            }
+            
+            count++;
+            setProgress(`Saved ${count} / ${parsedIngredients.length} items...`);
+
+        } catch (err) {
+            console.error("Save failed for " + group.name, err);
+        }
+    }
+
+    onComplete();
+  };
+
+  // --- RENDER ---
+  if (step === 'upload') return (
+    <Card className="shadow-lg">
+        <CardHeader><CardTitle>Import Ingredients</CardTitle></CardHeader>
+        <CardContent>
+            {isProcessing ? (
+                <div className="text-center py-10 text-blue-600"><Loader2 className="animate-spin w-8 h-8 mx-auto"/> {progress}</div>
+            ) : (
+                <div className="border-2 border-dashed p-10 text-center rounded-lg">
+                    <Input type="file" accept=".csv" onChange={handleFileUpload} className="mb-4" />
+                    <Button onClick={handleParseFile} disabled={!selectedFile} className="bg-emerald-600">Analyze File</Button>
+                </div>
+            )}
+            {error && <div className="text-red-500 mt-4 text-sm">{error}</div>}
+        </CardContent>
     </Card>
   );
 
-  return (
-    <Card className="max-w-6xl mx-auto mt-6 shadow-md border-gray-200">
-      <CardHeader className="border-b bg-gray-50/50 pb-4">
-        <div className="flex justify-between items-center">
-            <CardTitle className="text-lg flex items-center gap-2"><FileSpreadsheet className="w-5 h-5 text-blue-600"/> Scalable Importer</CardTitle>
-            <div className="text-xs font-medium text-gray-500">Step: {step.toUpperCase()}</div>
-        </div>
-      </CardHeader>
-      
-      <CardContent className="p-0">
-        {errorMsg && <div className="m-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200 flex items-center gap-2"><AlertCircle className="w-4 h-4"/>{errorMsg}</div>}
-
-        {step === 'upload' && (
-          <div className="text-center py-16 px-6">
-             <Label htmlFor="file" className="cursor-pointer inline-flex flex-col items-center gap-4 p-8 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition w-full max-w-lg">
-                <FileSpreadsheet className="w-12 h-12 text-blue-300"/>
-                <span className="text-blue-600 font-semibold text-lg">Upload Spreadsheet</span>
-             </Label>
-             <Input id="file" type="file" accept=".csv" className="hidden" onChange={handleFileSelect} />
-          </div>
-        )}
-
-        {step === 'map' && (
-          <div className="h-[500px] flex flex-col">
-            <div className="flex-1 overflow-auto p-4">
-                <Table>
-                    <TableHeader className="bg-gray-50 sticky top-0"><TableRow><TableHead>App Field</TableHead><TableHead></TableHead><TableHead>Your Column</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                        {FIELD_CONFIG.map(f => (
-                            <TableRow key={f.key}>
-                                <TableCell className="font-medium">{f.label}</TableCell>
-                                <TableCell className="text-center"><ArrowRight className="w-4 h-4 text-gray-400 mx-auto"/></TableCell>
-                                <TableCell>
-                                    <Select value={mapping[f.key] || 'skip'} onValueChange={v => setMapping({...mapping, [f.key]: v==='skip'?null:v})}>
-                                        <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="-- Ignore --"/></SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="skip">-- Ignore --</SelectItem>
-                                            {rawHeaders.map(h => <SelectItem key={h} value={h}>{h}</SelectItem>)}
-                                        </SelectContent>
-                                    </Select>
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
-            </div>
-            <div className="border-t p-4 flex justify-end gap-2 bg-gray-50">
-                <Button variant="outline" onClick={() => setStep('upload')}>Back</Button>
-                <Button onClick={handleGenerateReport} className="bg-blue-600">Next: Audit Changes</Button>
-            </div>
-          </div>
-        )}
-
-        {step === 'audit' && (
-          <div className="p-6">
-            <div className="flex gap-4 mb-6 items-center">
-                <div className="bg-blue-50 border border-blue-100 p-4 rounded-md flex-1">
-                    <h4 className="font-bold text-blue-900">Audit Complete</h4>
-                    <div className="flex gap-6 mt-2 text-sm">
-                        <span className="text-green-600 font-bold bg-green-50 px-2 py-1 rounded border border-green-200">{stats.new} New Items</span>
-                        <span className="text-orange-600 font-bold bg-orange-50 px-2 py-1 rounded border border-orange-200">{stats.updated} Updates</span>
-                        <span className="text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200">{stats.unchanged} Unchanged</span>
+  if (step === 'mapping') return (
+    <Card className="max-w-4xl mx-auto shadow-lg">
+        <CardHeader><CardTitle>Map Columns</CardTitle></CardHeader>
+        <CardContent>
+            <div className="grid grid-cols-2 gap-4 h-[400px] overflow-auto">
+                {['name','supplier','category','sku_number','purchase_price','case_price','purchase_quantity'].map(field => (
+                    <div key={field} className="flex justify-between items-center border p-2 rounded">
+                        <Label className="capitalize">{field.replace('_',' ')}</Label>
+                        <Select value={columnMappings[field]} onValueChange={v=>setColumnMappings({...columnMappings, [field]: v})}>
+                            <SelectTrigger className="w-[200px]"><SelectValue placeholder="Select Col"/></SelectTrigger>
+                            <SelectContent>
+                                {parsedHeaders.map(h => <SelectItem key={h} value={h}>{h}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
                     </div>
-                </div>
-                <Button onClick={handleImport} className="bg-emerald-600 h-14 text-lg px-8 shadow-md hover:bg-emerald-700">
-                    <Save className="w-5 h-5 mr-2"/> Confirm Import
+                ))}
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+                <Button variant="ghost" onClick={()=>setStep('upload')}>Back</Button>
+                <Button onClick={handleConfirmMappings} className="bg-emerald-600">{isProcessing ? <Loader2 className="animate-spin"/> : 'Next: Audit'}</Button>
+            </div>
+        </CardContent>
+    </Card>
+  );
+
+  if (step === 'confirm') return (
+    <Card className="max-w-6xl mx-auto shadow-lg">
+        <CardHeader><CardTitle>Review & Import</CardTitle></CardHeader>
+        <CardContent>
+            <div className="h-[500px] overflow-auto border rounded bg-gray-50 p-4 space-y-2">
+                {parsedIngredients.map((group, i) => (
+                    <div key={i} className="bg-white border rounded p-3 shadow-sm">
+                        <div className="flex justify-between font-bold text-gray-800">
+                            <span>{group.name}</span>
+                            <span className="text-xs font-normal text-gray-500">{group.exactMatch ? 'Existing' : 'New Ingredient'}</span>
+                        </div>
+                        {group.variantAnalysis.map((v, idx) => (
+                            <div key={idx} className="flex justify-between text-sm mt-1 pl-4 border-l-2 border-gray-200">
+                                <span>{v.size_ml}ml • {v.sku_number || 'No SKU'}</span>
+                                {v.isNew ? (
+                                    <span className="text-green-600 font-bold">+ New Variant</span>
+                                ) : v.changes.length > 0 ? (
+                                    <div className="flex gap-2">
+                                        {v.changes.map((c, ci) => (
+                                            <span key={ci} className="text-orange-600 bg-orange-50 px-1 rounded text-xs border border-orange-200">
+                                                {c.field}: {c.oldValue} → {c.newValue}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <span className="text-gray-400">No Change</span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                ))}
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+                <Button variant="ghost" onClick={()=>setStep('mapping')}>Back</Button>
+                <Button onClick={handleSaveIngredients} className="bg-emerald-600 h-12 px-8 text-lg">
+                    {isProcessing ? <Loader2 className="animate-spin mr-2"/> : <Save className="mr-2 w-5 h-5"/>}
+                    {isProcessing ? progress : 'Import Now'}
                 </Button>
             </div>
-
-            <div className="border rounded-md h-[500px] overflow-auto bg-white shadow-sm">
-                <Table>
-                    <TableHeader className="bg-gray-100 sticky top-0 z-10 shadow-sm">
-                        <TableRow>
-                            <TableHead className="w-[30%]">Item</TableHead>
-                            <TableHead className="w-[15%]">SKU</TableHead>
-                            <TableHead className="w-[10%]">Status</TableHead>
-                            <TableHead className="w-[45%]">Changes Detected</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {reportData.map((row, i) => (
-                            <TableRow key={i} className="hover:bg-gray-50">
-                                <TableCell className="font-medium">
-                                    <div className="text-gray-900">{row.name}</div>
-                                    <div className="text-xs text-gray-500">{row.variant_size || '750ml'} • {row.supplier}</div>
-                                </TableCell>
-                                <TableCell className="text-xs font-mono text-gray-500">{row.sku_number}</TableCell>
-                                <TableCell>
-                                    {row.status === 'NEW' && <Badge className="bg-green-100 text-green-700 border-green-200 shadow-none">New</Badge>}
-                                    {row.status === 'UPDATE' && <Badge className="bg-orange-100 text-orange-700 border-orange-200 shadow-none">Update</Badge>}
-                                    {row.status === 'SAME' && <span className="text-gray-400 text-xs">Unchanged</span>}
-                                </TableCell>
-                                <TableCell>
-                                    {row.changes?.length > 0 ? (
-                                        <div className="space-y-1 py-1">
-                                            {row.changes.map((c, idx) => (
-                                                <div key={idx} className="flex items-center gap-2 text-xs bg-orange-50/50 p-1.5 rounded border border-orange-100">
-                                                    <span className="font-bold text-gray-600 w-16">{c.field}:</span>
-                                                    {c.field === 'Image' ? (
-                                                        <span className="text-blue-600 flex items-center"><ImageIcon className="w-3 h-3 mr-1"/> URL Updated</span>
-                                                    ) : (
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="line-through text-red-300 decoration-red-300">
-                                                                {c.type==='currency' ? formatCurrency(c.old) : (c.old || 'Empty')}
-                                                            </span>
-                                                            <ArrowRight className="w-3 h-3 text-gray-400"/>
-                                                            <span className="font-bold text-green-600">
-                                                                {c.type==='currency' ? formatCurrency(c.new) : c.new}
-                                                            </span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <span className="text-gray-300 text-xs">-</span>
-                                    )}
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
-            </div>
-          </div>
-        )}
-
-        {step === 'processing' && (
-           <div className="text-center py-24">
-               <Loader2 className="w-16 h-16 animate-spin mx-auto text-blue-600 mb-6"/>
-               <div className="text-xl font-medium text-gray-900">{status}</div>
-               {progress > 0 && (
-                   <div className="w-64 h-2 bg-gray-200 rounded-full mx-auto mt-4 overflow-hidden">
-                       <div className="h-full bg-blue-600 transition-all duration-300" style={{width: `${progress}%`}}></div>
-                   </div>
-               )}
-               <p className="text-gray-500 mt-2">{progress}%</p>
-           </div>
-        )}
-      </CardContent>
+        </CardContent>
     </Card>
   );
 }
