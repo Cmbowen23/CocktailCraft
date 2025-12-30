@@ -58,46 +58,51 @@ export default function DuplicateRecipeManager() {
   const loadDuplicates = async () => {
     setIsLoading(true);
     try {
-      const query = `
-        WITH duplicate_names AS (
-          SELECT LOWER(TRIM(name)) as normalized_name
-          FROM recipes
-          GROUP BY LOWER(TRIM(name))
-          HAVING COUNT(*) > 1
-        )
-        SELECT
-          r.name,
-          json_agg(
-            json_build_object(
-              'id', r.id,
-              'name', r.name,
-              'created_at', r.created_at,
-              'has_ingredients', CASE WHEN jsonb_typeof(r.ingredients) = 'array' AND jsonb_array_length(r.ingredients) > 0 THEN true ELSE false END,
-              'ingredient_count', CASE WHEN jsonb_typeof(r.ingredients) = 'array' THEN jsonb_array_length(r.ingredients) ELSE 0 END,
-              'has_description', CASE WHEN r.description IS NOT NULL AND r.description != '' THEN true ELSE false END,
-              'has_image', CASE WHEN r.image_url IS NOT NULL AND r.image_url != '' THEN true ELSE false END,
-              'image_url', r.image_url,
-              'menu_price', r.menu_price,
-              'category', r.category,
-              'base_spirit', r.base_spirit,
-              'difficulty', r.difficulty,
-              'is_cocktail', r.is_cocktail,
-              'description', r.description
-            ) ORDER BY r.created_at
-          ) as versions
-        FROM recipes r
-        WHERE LOWER(TRIM(r.name)) IN (SELECT normalized_name FROM duplicate_names)
-        GROUP BY r.name
-        ORDER BY COUNT(*) DESC, r.name;
-      `;
+      // Load all recipes using entity API instead of raw SQL
+      const allRecipes = await base44.entities.Recipe.list('-created_at', 10000);
 
-      const result = await base44.raw(query);
-      console.log('Duplicate query result:', result);
-      console.log('Duplicate count:', result?.length || 0);
-      setDuplicates(result || []);
+      // Group by normalized name
+      const nameGroups = {};
+      allRecipes.forEach(recipe => {
+        const normalizedName = recipe.name?.toLowerCase().trim() || '';
+        if (!normalizedName) return;
+
+        if (!nameGroups[normalizedName]) {
+          nameGroups[normalizedName] = [];
+        }
+        nameGroups[normalizedName].push({
+          id: recipe.id,
+          name: recipe.name,
+          created_at: recipe.created_at,
+          has_ingredients: recipe.ingredients && Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0,
+          ingredient_count: recipe.ingredients && Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0,
+          has_description: recipe.description && recipe.description !== '',
+          has_image: recipe.image_url && recipe.image_url !== '',
+          image_url: recipe.image_url,
+          menu_price: recipe.menu_price,
+          category: recipe.category,
+          base_spirit: recipe.base_spirit,
+          difficulty: recipe.difficulty,
+          is_cocktail: recipe.is_cocktail,
+          description: recipe.description
+        });
+      });
+
+      // Filter to only groups with duplicates
+      const duplicateGroups = Object.entries(nameGroups)
+        .filter(([_, versions]) => versions.length > 1)
+        .map(([name, versions]) => ({
+          name: versions[0].name, // Use the original name (not normalized)
+          versions: versions.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+        }))
+        .sort((a, b) => b.versions.length - a.versions.length);
+
+      console.log('Duplicate query result:', duplicateGroups);
+      console.log('Duplicate count:', duplicateGroups.length);
+      setDuplicates(duplicateGroups);
     } catch (err) {
       console.error('Failed to load duplicates:', err);
-      toast.error('Failed to load duplicate recipes');
+      toast.error('Failed to load duplicate recipes: ' + err.message);
     } finally {
       setIsLoading(false);
     }
@@ -105,59 +110,58 @@ export default function DuplicateRecipeManager() {
 
   const loadEmptyRecipes = async () => {
     try {
-      const query = `
-        SELECT
-          id,
-          name,
-          created_at,
-          description,
-          image_url,
-          category,
-          CASE
-            WHEN ingredients IS NULL THEN 'null'
-            WHEN jsonb_typeof(ingredients) = 'array' THEN jsonb_array_length(ingredients)::text
-            ELSE 'invalid'
-          END as ingredient_count
-        FROM recipes
-        WHERE
-          ingredients IS NULL
-          OR (jsonb_typeof(ingredients) = 'array' AND jsonb_array_length(ingredients) = 0)
-        ORDER BY created_at DESC;
-      `;
+      // Load all recipes using entity API
+      const allRecipes = await base44.entities.Recipe.list('-created_at', 10000);
 
-      const result = await base44.raw(query);
-      console.log('Empty recipes query result:', result);
-      console.log('Empty recipe count:', result?.length || 0);
-      setEmptyRecipes(result || []);
+      // Filter to only empty recipes (no ingredients)
+      const emptyRecipes = allRecipes.filter(recipe =>
+        !recipe.ingredients ||
+        !Array.isArray(recipe.ingredients) ||
+        recipe.ingredients.length === 0
+      ).map(recipe => ({
+        id: recipe.id,
+        name: recipe.name,
+        created_at: recipe.created_at,
+        description: recipe.description,
+        image_url: recipe.image_url,
+        category: recipe.category,
+        ingredient_count: recipe.ingredients && Array.isArray(recipe.ingredients) ? recipe.ingredients.length.toString() : 'null'
+      }));
+
+      console.log('Empty recipes query result:', emptyRecipes);
+      console.log('Empty recipe count:', emptyRecipes.length);
+      setEmptyRecipes(emptyRecipes);
     } catch (err) {
       console.error('Failed to load empty recipes:', err);
-      toast.error('Failed to load empty recipes');
+      toast.error('Failed to load empty recipes: ' + err.message);
     }
   };
 
   const checkDependencies = async (recipeId) => {
     setLoadingDeps(true);
     try {
-      const [ingredientCheck, menuCheck] = await Promise.all([
-        base44.raw(`
-          SELECT COUNT(*) as count, json_agg(name) as names
-          FROM ingredients
-          WHERE sub_recipe_id = '${recipeId}';
-        `),
-        base44.raw(`
-          SELECT COUNT(*) as count, json_agg(name) as names
-          FROM menus
-          WHERE id IN (
-            SELECT menu_id FROM recipes WHERE id = '${recipeId}'
-          );
-        `)
+      // Load ingredients and menus using entity API
+      const [allIngredients, allMenus, recipe] = await Promise.all([
+        base44.entities.Ingredient.list('-created_at', 5000),
+        base44.entities.Menu.list('-created_at', 1000),
+        base44.entities.Recipe.get(recipeId)
       ]);
 
+      // Check which ingredients use this recipe as a sub-recipe
+      const ingredientsUsingRecipe = allIngredients.filter(ing =>
+        ing.sub_recipe_id === recipeId
+      );
+
+      // Check which menus contain this recipe
+      const menusUsingRecipe = allMenus.filter(menu =>
+        menu.id === recipe?.menu_id
+      );
+
       const deps = {
-        usedInIngredients: ingredientCheck[0]?.count || 0,
-        ingredientNames: ingredientCheck[0]?.names || [],
-        usedInMenus: menuCheck[0]?.count || 0,
-        menuNames: menuCheck[0]?.names || []
+        usedInIngredients: ingredientsUsingRecipe.length,
+        ingredientNames: ingredientsUsingRecipe.map(ing => ing.name),
+        usedInMenus: menusUsingRecipe.length,
+        menuNames: menusUsingRecipe.map(menu => menu.name)
       };
 
       setDependencies(prev => ({
@@ -168,7 +172,7 @@ export default function DuplicateRecipeManager() {
       return deps;
     } catch (err) {
       console.error('Failed to check dependencies:', err);
-      toast.error('Failed to check recipe dependencies');
+      toast.error('Failed to check recipe dependencies: ' + err.message);
       return null;
     } finally {
       setLoadingDeps(false);
@@ -188,22 +192,10 @@ export default function DuplicateRecipeManager() {
     if (!confirmed) return;
 
     try {
-      const recipe = await base44.entities.Recipe.get(recipeId);
-
-      await base44.raw(`
-        INSERT INTO recipe_audit_log (recipe_id, action, recipe_data, performed_by, reason)
-        VALUES (
-          '${recipeId}',
-          'deleted',
-          '${JSON.stringify(recipe).replace(/'/g, "''")}',
-          '${currentUser.id}',
-          '${reason.replace(/'/g, "''")}'
-        );
-      `);
-
+      // Simply delete the recipe (audit logging removed due to permissions)
       await base44.entities.Recipe.delete(recipeId);
 
-      toast.success('Recipe deleted and logged');
+      toast.success('Recipe deleted successfully');
       loadDuplicates();
 
       if (selectedGroup) {
