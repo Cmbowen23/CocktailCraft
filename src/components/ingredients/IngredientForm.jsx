@@ -226,6 +226,21 @@ export default function IngredientForm({
   readOnlyPricing = false,
   readOnly = false
 }) {
+  // Helper to safely parse custom_conversions
+  const getCustomConversionsArray = (customConversions) => {
+    if (!customConversions) return [];
+    if (Array.isArray(customConversions)) return customConversions;
+    if (typeof customConversions === 'string') {
+      try {
+        const parsed = JSON.parse(customConversions);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  };
+
   const [currentIngredient, setCurrentIngredient] = useState(() => {
     const baseDefaults = {
       name: '',
@@ -270,15 +285,38 @@ export default function IngredientForm({
       initialIngredient.tier = String(initialIngredient.tier).toLowerCase().replace(' ', '_');
     }
 
+    // Parse prep_actions if it's a string
     if (!Array.isArray(initialIngredient.prep_actions)) {
-      initialIngredient.prep_actions = [];
+      if (typeof initialIngredient.prep_actions === 'string') {
+        try {
+          initialIngredient.prep_actions = JSON.parse(initialIngredient.prep_actions);
+        } catch (e) {
+          initialIngredient.prep_actions = [];
+        }
+      } else {
+        initialIngredient.prep_actions = [];
+      }
     }
+
     if (!Array.isArray(initialIngredient.aliases)) {
       initialIngredient.aliases = [];
     }
+
+    // Parse custom_conversions if it's a string
     if (!Array.isArray(initialIngredient.custom_conversions)) {
-      initialIngredient.custom_conversions = [];
-    } else {
+      if (typeof initialIngredient.custom_conversions === 'string') {
+        try {
+          initialIngredient.custom_conversions = JSON.parse(initialIngredient.custom_conversions);
+        } catch (e) {
+          initialIngredient.custom_conversions = [];
+        }
+      } else {
+        initialIngredient.custom_conversions = [];
+      }
+    }
+
+    // Normalize custom_conversions
+    if (Array.isArray(initialIngredient.custom_conversions)) {
       initialIngredient.custom_conversions = initialIngredient.custom_conversions.map(conv => {
         if (conv.from_amount != null && conv.to_amount != null && conv.to_amount > 0) {
           return conv;
@@ -325,14 +363,14 @@ export default function IngredientForm({
 
     (allIngredients || []).forEach(ing => {
       if (ing.purchase_unit) units.add(ing.purchase_unit);
-      const customConversions = Array.isArray(ing.custom_conversions) ? ing.custom_conversions : [];
+      const customConversions = getCustomConversionsArray(ing.custom_conversions);
       customConversions.forEach(conv => {
         if (conv.from_unit) units.add(conv.from_unit);
         if (conv.to_unit) units.add(conv.to_unit);
       });
     });
 
-    const currentCustomConversions = Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : [];
+    const currentCustomConversions = getCustomConversionsArray(currentIngredient.custom_conversions);
     currentCustomConversions.forEach(conv => {
       if (conv.from_unit) units.add(conv.from_unit);
       if (conv.to_unit) units.add(conv.to_unit);
@@ -362,12 +400,12 @@ export default function IngredientForm({
 
     // from all ingredients
     (allIngredients || []).forEach((ing) => {
-      const customConversions = Array.isArray(ing.custom_conversions) ? ing.custom_conversions : [];
+      const customConversions = getCustomConversionsArray(ing.custom_conversions);
       customConversions.forEach(addConv);
     });
 
     // + from this ingredient
-    const currentCustomConversions = Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : [];
+    const currentCustomConversions = getCustomConversionsArray(currentIngredient.custom_conversions);
     currentCustomConversions.forEach(addConv);
 
     return Array.from(map.values());
@@ -1884,7 +1922,7 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
                     const costPer = parseFloat(currentIngredient.cost_per_unit) || 0;
                     const baseUnit = currentIngredient.unit || 'unit';
                     const purchaseUnit = currentIngredient.purchase_unit;
-                    const conversions = Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : [];
+                    const conversions = getCustomConversionsArray(currentIngredient.custom_conversions);
 
                     let conversionLabel = '';
 
@@ -2159,23 +2197,26 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
                       {!readOnly && (
                         <CustomConversionsManager
                           customConversions={
-                            Array.isArray(currentIngredient.custom_conversions) ? currentIngredient.custom_conversions : []
+                            getCustomConversionsArray(currentIngredient.custom_conversions)
                           }
                           onConversionsChange={handleConversionsChange}
                           availableUnits={availableUnitsForConversions}
                           readOnly={readOnly}
                         />
                       )}
-                      {readOnly && Array.isArray(currentIngredient.custom_conversions) && currentIngredient.custom_conversions.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="text-md font-semibold text-gray-800">Custom Conversions</h4>
-                          <ul className="list-disc pl-5 text-sm text-gray-600">
-                            {currentIngredient.custom_conversions.map((c, idx) => (
-                              <li key={idx}>{c.from_amount} {c.from_unit} = {c.to_amount} {c.to_unit}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
+                      {readOnly && (() => {
+                        const conversions = getCustomConversionsArray(currentIngredient.custom_conversions);
+                        return conversions.length > 0 && (
+                          <div className="space-y-2">
+                            <h4 className="text-md font-semibold text-gray-800">Custom Conversions</h4>
+                            <ul className="list-disc pl-5 text-sm text-gray-600">
+                              {conversions.map((c, idx) => (
+                                <li key={idx}>{c.from_amount} {c.from_unit} = {c.to_amount} {c.to_unit}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      })()}
                     </motion.div>
                   )}
                 </AnimatePresence>
