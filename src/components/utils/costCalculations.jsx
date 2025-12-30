@@ -23,6 +23,21 @@ const exemptIngredients = [
 
 const invalidPrepActions = ['pour', 'add', 'stir', 'shake', 'combine', 'mix', 'prepare', 'measure'];
 
+// Helper function to safely parse prep_actions
+const getPrepActionsArray = (prepActions) => {
+  if (!prepActions) return [];
+  if (Array.isArray(prepActions)) return prepActions;
+  if (typeof prepActions === 'string') {
+    try {
+      const parsed = JSON.parse(prepActions);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
+};
+
 const FRUITS_THAT_JUICE = [
   "lemon",
   "lime",
@@ -483,7 +498,7 @@ export const calculateIngredientCost = (
   // CRITICAL: Handle prep action costing based on prep_action_id
   let resolvedPrepAction = null;
   if (ingLine.prep_action_id) {
-    resolvedPrepAction = match.prep_actions?.find(p => p.id === ingLine.prep_action_id);
+    resolvedPrepAction = getPrepActionsArray(match.prep_actions).find(p => p.id === ingLine.prep_action_id);
     if (!resolvedPrepAction) {
       return { cost: 0, status: "invalid_prep_action" };
     }
@@ -753,7 +768,7 @@ export const getIngredientInfo = (ingredientLine, allIngredients, variantsLookup
 
   // Reconstruct display value with comma separator
   if (prep_action_id && match.prep_actions) {
-    const matchedPrep = match.prep_actions.find(p => p.id === prep_action_id);
+    const matchedPrep = getPrepActionsArray(match.prep_actions).find(p => p.id === prep_action_id);
     if (matchedPrep) {
       displayValue = `${match.name}, ${matchedPrep.name}`;
       displayUnit = matchedPrep.yield_unit || match.unit || "oz";
@@ -786,7 +801,7 @@ export const getIngredientInfo = (ingredientLine, allIngredients, variantsLookup
 
   let resolvedPrepAction = null;
   if (prep_action_id) {
-    resolvedPrepAction = match.prep_actions?.find(p => p.id === prep_action_id);
+    resolvedPrepAction = getPrepActionsArray(match.prep_actions).find(p => p.id === prep_action_id);
     if (!resolvedPrepAction) {
       return { costStatus: "no_cost", displayValue: displayValue, displayUnit: displayUnit };
     }

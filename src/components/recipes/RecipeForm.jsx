@@ -25,6 +25,21 @@ const exemptIngredients = [
   'sparkling water', 'soda water', 'club soda', 'ice'
 ];
 
+// Helper function to safely parse prep_actions
+const getPrepActionsArray = (prepActions) => {
+  if (!prepActions) return [];
+  if (Array.isArray(prepActions)) return prepActions;
+  if (typeof prepActions === 'string') {
+    try {
+      const parsed = JSON.parse(prepActions);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
+};
+
 const IngredientMappingSearch = ({ currentName, allIngredients, onMap, onCreate }) => {
   const [searchTerm, setSearchTerm] = React.useState("");
   
@@ -178,7 +193,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
                 if (matchedIng) {
                   ingredientId = matchedIng.id;
                   if (prepActionNameFromText && matchedIng.prep_actions) {
-                    const matchedPrep = matchedIng.prep_actions.find(p => p.name === prepActionNameFromText);
+                    const matchedPrep = getPrepActionsArray(matchedIng.prep_actions).find(p => p.name === prepActionNameFromText);
                     if (matchedPrep) {
                       prepActionId = matchedPrep.id;
                       displayName = `${matchedIng.name}, ${matchedPrep.name}`;
@@ -196,7 +211,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
                 }
               } else if (ingredientId && matchedIng) {
                 if (prepActionId && matchedIng.prep_actions) {
-                  const matchedPrep = matchedIng.prep_actions.find(p => p.id === prepActionId);
+                  const matchedPrep = getPrepActionsArray(matchedIng.prep_actions).find(p => p.id === prepActionId);
                   if (matchedPrep) {
                     displayName = `${matchedIng.name}, ${matchedPrep.name}`;
                   } else {
@@ -315,7 +330,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
           if (matchedIng) {
             ingredientId = matchedIng.id;
             if (prepActionNameFromText && matchedIng.prep_actions) {
-              const matchedPrep = matchedIng.prep_actions.find(p => p.name === prepActionNameFromText);
+              const matchedPrep = getPrepActionsArray(matchedIng.prep_actions).find(p => p.name === prepActionNameFromText);
               if (matchedPrep) {
                 prepActionId = matchedPrep.id;
                 displayName = `${matchedIng.name}, ${matchedPrep.name}`;
@@ -330,7 +345,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
           }
         } else if (ingredientId && matchedIng) {
           if (prepActionId && matchedIng.prep_actions) {
-            const matchedPrep = matchedIng.prep_actions.find(p => p.id === prepActionId);
+            const matchedPrep = getPrepActionsArray(matchedIng.prep_actions).find(p => p.id === prepActionId);
             if (matchedPrep) {
               displayName = `${matchedIng.name}, ${matchedPrep.name}`;
             } else {
@@ -375,7 +390,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
             const updatedIng = { ...ing, ingredient_id: matchedIng.id };
 
             if (prepActionNameFromText && matchedIng.prep_actions) {
-              const matchedPrep = matchedIng.prep_actions.find(p => p.name === prepActionNameFromText);
+              const matchedPrep = getPrepActionsArray(matchedIng.prep_actions).find(p => p.name === prepActionNameFromText);
               if (matchedPrep) {
                 updatedIng.prep_action_id = matchedPrep.id;
                 updatedIng.ingredient_name = `${matchedIng.name}, ${matchedPrep.name}`;
@@ -843,7 +858,7 @@ const RecipeForm = forwardRef(({ recipe, onSubmit, onCancel, allIngredients = []
         let defaultUnit = ingredient.unit || matchedIng.unit || 'ml';
 
         if (prepActionNameFromText && matchedIng.prep_actions) {
-          const matchedPrep = matchedIng.prep_actions.find(p => p.name === prepActionNameFromText);
+          const matchedPrep = getPrepActionsArray(matchedIng.prep_actions).find(p => p.name === prepActionNameFromText);
           if (matchedPrep) {
             updatedIng.prep_action_id = matchedPrep.id;
             defaultUnit = matchedPrep.yield_unit || defaultUnit;

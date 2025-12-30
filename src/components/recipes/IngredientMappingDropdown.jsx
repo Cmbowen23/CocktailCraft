@@ -18,6 +18,21 @@ import {
 } from "@/components/ui/popover";
 import { safeLower, safeTrim } from "../utils/stringSafe";
 
+// Helper function to safely parse prep_actions
+const getPrepActionsArray = (prepActions) => {
+  if (!prepActions) return [];
+  if (Array.isArray(prepActions)) return prepActions;
+  if (typeof prepActions === 'string') {
+    try {
+      const parsed = JSON.parse(prepActions);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
+};
+
 export default function IngredientMappingDropdown({
   ingredientName,
   suggestions = [],
@@ -193,7 +208,7 @@ export default function IngredientMappingDropdown({
                                   if (ingredient._isVirtualPrepAction && ingredient._prepAction) {
                                       const baseIng = allIngredients.find(i => i.id === ingredient.id.split('_')[0]);
                                       if (baseIng?.prep_actions) {
-                                          const prep = baseIng.prep_actions.find(p => p.name === ingredient._prepAction);
+                                          const prep = getPrepActionsArray(baseIng.prep_actions).find(p => p.name === ingredient._prepAction);
                                           if (prep?.yield_unit) {
                                               displayUnit = prep.yield_unit;
                                           }
