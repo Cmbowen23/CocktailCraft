@@ -241,6 +241,21 @@ export default function IngredientForm({
     return [];
   };
 
+  // Helper to safely parse aliases
+  const getAliasesArray = (aliases) => {
+    if (!aliases) return [];
+    if (Array.isArray(aliases)) return aliases;
+    if (typeof aliases === 'string') {
+      try {
+        const parsed = JSON.parse(aliases);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  };
+
   const [currentIngredient, setCurrentIngredient] = useState(() => {
     const baseDefaults = {
       name: '',
@@ -298,8 +313,17 @@ export default function IngredientForm({
       }
     }
 
+    // Parse aliases if it's a string
     if (!Array.isArray(initialIngredient.aliases)) {
-      initialIngredient.aliases = [];
+      if (typeof initialIngredient.aliases === 'string') {
+        try {
+          initialIngredient.aliases = JSON.parse(initialIngredient.aliases);
+        } catch (e) {
+          initialIngredient.aliases = [];
+        }
+      } else {
+        initialIngredient.aliases = [];
+      }
     }
 
     // Parse custom_conversions if it's a string
@@ -2316,11 +2340,11 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
               onClick={() => setShowAliasModal(true)}
               className="text-blue-600 hover:text-blue-800 hover:bg-blue-50"
             >
-              Manage Aliases ({currentIngredient.aliases?.length || 0})
+              Manage Aliases ({getAliasesArray(currentIngredient.aliases).length})
             </Button>
           ) : (
             <div className="text-sm text-gray-500 self-center">
-              Aliases: {currentIngredient.aliases?.join(', ') || 'None'}
+              Aliases: {getAliasesArray(currentIngredient.aliases).join(', ') || 'None'}
             </div>
           )}
           <div className="flex gap-3 ml-auto">
@@ -2472,7 +2496,7 @@ IMPORTANT: DO NOT provide a 'supplier'. Leave the supplier field empty.`,
       <AliasManagerModal
         isOpen={showAliasModal}
         onClose={() => setShowAliasModal(false)}
-        aliases={currentIngredient.aliases || []}
+        aliases={getAliasesArray(currentIngredient.aliases)}
         onAliasesChange={(newAliases) => setCurrentIngredient(prev => ({ ...prev, aliases: newAliases }))}
       />
     </>
