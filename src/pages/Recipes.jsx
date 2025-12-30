@@ -151,8 +151,9 @@ export default function RecipesPage() {
           }
         }
 
-        if (Array.isArray(prepActions)) {
-          const matchedPrep = prepActions.find(p => p.name === prepActionNameFromText);
+        // Ensure prepActions is an array before using .find()
+        if (Array.isArray(prepActions) && prepActions.length > 0) {
+          const matchedPrep = prepActions.find(p => p && p.name === prepActionNameFromText);
           if (matchedPrep) {
             prepActionId = matchedPrep.id;
             displayName = `${matchedIng.name} - ${matchedPrep.name}`;
